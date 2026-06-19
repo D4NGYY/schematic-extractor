@@ -1,6 +1,6 @@
 # HANDOFF — schematic_extractor (Schematic AI Reasoner)
 
-**Updated:** 2026-06-19 (P3/B1 done) · **Status:** Phases 0–3 complete + P1+P2+P3 fixes; pipeline funziona su schematics reali con classi significative (nessun blocker rimasto fino a Fase 4)
+**Updated:** 2026-06-19 (Phase 4 ERC done) · **Status:** Phases 0–4 complete; ERC funzionante, identifica violazioni reali sul Bryston (31 err + 1 warn — stub matching ancora debole, atteso)
 
 ---
 
@@ -8,7 +8,7 @@
 
 Pipeline that turns **vector** schematic PDFs into a queryable Components↔Nets graph (export to SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. No OCR — purely geometric extraction (the deliberate alternative to OCR, which is unreliable on schematics).
 
-**Honest current state:** the test suite is green (103/103). On the Bryston real schematic: 168 refs, 120 values, 162 junctions; DBSCAN 7 clusters; classifier rule-based: 71% non-unknown (5/7 components classified). ML classifier path (RF) still untrained — `RuleBasedClassifier` is the active default. Net reconstruction and graph export work structurally.
+**Honest current state:** the test suite is green (119/119). Bryston page 0: 168 refs, 120 values, 162 junctions; 7 DBSCAN clusters; 71% classified (rule-based); 26 nets reconstructed. ERC (Phase 4): 31 errors + 1 warning — 6/7 components isolated + 25/26 nets unconnected because stub matching (3px fixed tolerance) fails on Bryston PDF coordinate scale. This is a known limitation (D6), not a bug in ERC. ML classifier path (RF) still untrained; `RuleBasedClassifier` is the active default.
 
 ## 2. Goal & scope
 
@@ -37,7 +37,7 @@ Ground truth: KiCad .kicad_sch → coords → auto-labeled training set (no manu
 - **Phase 1** ✅ complete (mypy fixes already applied in code).
 - **Phase 2** ✅ structurally complete — BUT functionally broken on real input: `_merge_text_spans()` is a stub (B3), `is_value` regex inadequate (B4), `is_ref_designator` incomplete (D1), junction detection unreachable (B2).
 - **Phase 3** ✅ structurally complete — BUT ML classifier never trained (B1), DBSCAN eps estimation wrong for large schematics (D2), pin assignment from bbox corners topologically wrong (D3).
-- **Phase 4** ⬜ ERC (electrical rule check) — not started; depends on B1, B2, D2 to give meaningful results.
+- **Phase 4** ✅ ERC — `src/core/erc.py`: 4 regole (ISOLATED_COMPONENT, FLOATING_PIN, DANGLING_NET, UNCONNECTED_NET, UNNAMED_NET). 16 test, 119/119 pytest. Bryston: 31 err + 1 warn (atteso: stub matching debole).
 - **Phase 5** ⬜ LLM tool calling + 20-question topology benchmark — not started.
 - **Phase 6** ⬜ Streamlit UI (`src/ui/app.py` does not exist) + portfolio — not started.
 
@@ -62,11 +62,12 @@ Ground truth: KiCad .kicad_sch → coords → auto-labeled training set (no manu
 - N1 HANDOFF/README stale (claimed 10 mypy errors — already 0). N2 perf O(n²/n³) on large schematics. N3 test-coverage gaps (no real-PDF test, no topological-correctness test). N4 `node_id` may collide with real `U1`. N5 `stub_length` not configurable.
 
 ## 6. Next steps (ordered)
-1. **Phase 4 — ERC** (`src/core/erc.py`): floating pins, isolated components, dangling nets. Now unblocked: we have refs, values, junctions, classes.
-2. **D3 full** — real pin positions from symbol geometry (class known now → pin count/layout per class).
-3. **D5 full** — collapse TextAssociator+`_nearest_cluster` into one pass using DBSCAN cluster bboxes.
-4. **B1 ML upgrade** — train RF on real KiCad→PDF pairs when available; `RuleBasedClassifier` stays as fallback.
-5. Phase 5 (LLM tools + benchmark) → Phase 6 (UI).
+1. **D6 — Stub matching format-aware**: il matching a 3px fisso fallisce sulle coordinate reali del Bryston. Necessario per connettere componenti a nets e ridurre i falsi ERC. Senza D6, ERC è sempre rumoroso.
+2. **D3 full** — pin positions reali da geometria simbolo (classe nota ora).
+3. **D5 full** — collassare TextAssociator+`_nearest_cluster` in un unico passo.
+4. **Phase 5** — LLM tool calling (`src/core/llm_tools.py`) + 20-question topology benchmark.
+5. **Phase 6** — Streamlit UI (`src/ui/app.py`).
+6. **B1 ML upgrade** — train RF su coppie KiCad→PDF reali; `RuleBasedClassifier` rimane fallback.
 
 ## 7. Run / test
 ```

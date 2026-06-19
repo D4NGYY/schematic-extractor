@@ -1,6 +1,6 @@
 # TODO — schematic_extractor
 
-**Updated:** 2026-06-19 (P3/B1 done) · Source of truth for what's next. Work top-down within each priority block.
+**Updated:** 2026-06-19 (Phase 4 ERC done) · Source of truth for what's next. Work top-down within each priority block.
 
 **Legend:** `[ ]` open · `[~]` in progress · `[x]` done · severity 🔴 blocker / 🟡 should-fix / 🟢 nice-to-have
 
@@ -31,7 +31,7 @@
 
 ## P4 — Phases 4–6 (after P1–P3)
 
-- [ ] 🟡 **Phase 4 — ERC** (`src/core/erc.py`): floating pins, isolated components, dangling nets.
+- [x] 🟡 **Phase 4 — ERC** (`src/core/erc.py`): ISOLATED_COMPONENT, FLOATING_PIN, DANGLING_NET, UNCONNECTED_NET, UNNAMED_NET. 16 test. Bryston: 31 err + 1 warn (stub matching debole → D6 prioritario).
 - [ ] 🟡 **Phase 5 — LLM tool calling** (`src/core/llm_tools.py`) + 20-question topology benchmark.
 - [ ] 🟢 **Phase 6 — Streamlit UI** (`src/ui/app.py`): 300 DPI PNG render + SVG overlay + selectbox; then portfolio polish.
 
