@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from dataclasses import dataclass
 
 import numpy as np
+import numpy.typing as npt
 import structlog
-from sklearn.cluster import DBSCAN
 
 from src.core.pdf_parser import PDFSegment, PDFShape, PDFTextBlock
 
@@ -36,12 +37,14 @@ class ComponentCluster:
 
 
 class SpatialClusterer:
-    """Clustering spaziale di segmenti e forme PDF usando DBSCAN con epsilon adattivo.
+    """Clustering spaziale di segmenti e forme PDF.
 
-    Euristiche:
-    - Epsilon adattivo basato su mediana delle distanze inter-segmento
-    - Min_samples = 2 (componenti hanno almeno 2 pin/wire)
-    - Features per clustering: punto medio di ogni segmento
+    Single-linkage sulla prossimità degli ENDPOINT dei segmenti (union-find), non
+    DBSCAN sui midpoint: con un eps globale i midpoint dei tratti dei simboli
+    (densamente impacchettati) si incatenano in un unico blob a livello di pagina.
+    Clusterizzare sugli endpoint condivisi rispecchia come un simbolo è disegnato
+    — tratti che si toccano — e separa simboli distinti (i fili che li
+    collegherebbero sono gia rimossi da `separate_wires`).
     """
 
     def __init__(self, eps: float | None = None, min_samples: int = 2) -> None:
@@ -49,72 +52,149 @@ class SpatialClusterer:
         self.min_samples = min_samples
 
     def cluster(self, segments: list[PDFSegment], shapes: list[PDFShape]) -> list[ComponentCluster]:
-        """Clusterizza segmenti e forme in componenti candidate."""
+        """Clusterizza segmenti e forme in componenti candidate.
+
+        `link_dist`: `self.eps` se fornito esplicitamente (override / test),
+        altrimenti adattivo data-derived (p60 della distanza al piu vicino endpoint
+        di un ALTRO segmento). Le shapes vengono assegnate al gruppo-segmenti il cui
+        endpoint piu vicino dista <= link_dist dal centro shape; le shapes orfane
+        (es. cornici pagina lontane da ogni tratto) sono scartate.
+        Gruppi con meno di `min_samples` membri (segmenti + shapes) sono noise.
+        """
         if not segments and not shapes:
             return []
 
-        # Punti per clustering: midpoint di ogni segmento + centro di ogni shape
-        points: list[tuple[float, float]] = []
-        point_to_obj: list[tuple[str, int]] = []  # ("seg", idx) o ("shape", idx)
+        link_dist = self.eps if self.eps is not None else self._estimate_link_dist(segments)
+        groups = self._link_segments(segments, link_dist)
+        seg_to_group = {seg_idx: gid for gid, idxs in enumerate(groups) for seg_idx in idxs}
 
-        for i, seg in enumerate(segments):
-            points.append(seg.midpoint())
-            point_to_obj.append(("seg", i))
-
-        for i, shape in enumerate(shapes):
+        # Assegna ogni shape al gruppo-segmenti con l'endpoint piu vicino al centro shape.
+        shape_assign: dict[int, list[int]] = defaultdict(list)
+        for sh_idx, shape in enumerate(shapes):
             cx = (shape.bbox[0] + shape.bbox[2]) / 2
             cy = (shape.bbox[1] + shape.bbox[3]) / 2
-            points.append((cx, cy))
-            point_to_obj.append(("shape", i))
+            best_gid, best_d2 = -1, link_dist * link_dist
+            for seg_idx, seg in enumerate(segments):
+                for px, py in (seg.start, seg.end):
+                    d2 = (cx - px) ** 2 + (cy - py) ** 2
+                    if d2 <= best_d2:
+                        best_d2, best_gid = d2, seg_to_group[seg_idx]
+            if best_gid != -1:
+                shape_assign[best_gid].append(sh_idx)
 
-        x = np.array(points)
-        eps = self.eps if self.eps is not None else self._estimate_eps(x)
-
-        db = DBSCAN(eps=eps, min_samples=self.min_samples).fit(x)
-        labels = db.labels_
-
-        # Raggruppa per label
-        clusters: dict[int, ComponentCluster] = {}
-        for idx, label in enumerate(labels):
-            if label == -1:
+        clusters: list[ComponentCluster] = []
+        for gid, seg_idxs in enumerate(groups):
+            sh_idxs = shape_assign.get(gid, [])
+            if len(seg_idxs) + len(sh_idxs) < self.min_samples:
                 continue  # noise
-            if label not in clusters:
-                clusters[label] = ComponentCluster(
-                    cluster_id=int(label),
-                    segments=[],
-                    shapes=[],
-                    text_blocks=[],
-                    bbox=(float("inf"), float("inf"), float("-inf"), float("-inf")),
-                    center=(0.0, 0.0),
-                )
-            obj_type, obj_idx = point_to_obj[idx]
-            if obj_type == "seg":
-                clusters[label].segments.append(segments[obj_idx])
-            else:
-                clusters[label].shapes.append(shapes[obj_idx])
-
-        # Calcola bbox e center per ogni cluster
-        for cluster in clusters.values():
-            xs = [s.start[0] for s in cluster.segments] + [s.end[0] for s in cluster.segments]
-            ys = [s.start[1] for s in cluster.segments] + [s.end[1] for s in cluster.segments]
-            for sh in cluster.shapes:
+            cl_segs = [segments[i] for i in seg_idxs]
+            cl_shapes = [shapes[i] for i in sh_idxs]
+            xs = [s.start[0] for s in cl_segs] + [s.end[0] for s in cl_segs]
+            ys = [s.start[1] for s in cl_segs] + [s.end[1] for s in cl_segs]
+            for sh in cl_shapes:
                 xs.extend([sh.bbox[0], sh.bbox[2]])
                 ys.extend([sh.bbox[1], sh.bbox[3]])
-            if xs and ys:
-                cluster.bbox = (min(xs), min(ys), max(xs), max(ys))
-                cluster.center = ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
+            bbox = (min(xs), min(ys), max(xs), max(ys))
+            center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+            clusters.append(
+                ComponentCluster(
+                    cluster_id=len(clusters),
+                    segments=cl_segs,
+                    shapes=cl_shapes,
+                    text_blocks=[],
+                    bbox=bbox,
+                    center=center,
+                )
+            )
 
         logger.info(
             "Clustering complete",
             clusters=len(clusters),
-            noise=sum(1 for lbl in labels if lbl == -1),
-            eps=eps,
+            raw_groups=len(groups),
+            link_dist=link_dist,
         )
-        return list(clusters.values())
+        return clusters
+
+    @staticmethod
+    def _link_segments(segments: list[PDFSegment], link_dist: float) -> list[list[int]]:
+        """Single-linkage union-find: unisce segmenti con endpoint entro link_dist.
+
+        Usa una griglia spaziale (cella = link_dist) per query dei vicini in ~O(n).
+        Restituisce la lista dei gruppi (ognuno = lista di indici di segmento).
+        """
+        n = len(segments)
+        if n == 0:
+            return []
+        parent = list(range(n))
+
+        def find(a: int) -> int:
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+
+        def union(a: int, b: int) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        cell = max(link_dist, 1e-6)
+        grid: dict[tuple[int, int], list[tuple[int, float, float]]] = defaultdict(list)
+        for i, seg in enumerate(segments):
+            for x, y in (seg.start, seg.end):
+                grid[(int(x // cell), int(y // cell))].append((i, x, y))
+
+        d2_max = link_dist * link_dist
+        for i, seg in enumerate(segments):
+            for x, y in (seg.start, seg.end):
+                gx, gy = int(x // cell), int(y // cell)
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        for j, xx, yy in grid[(gx + dx, gy + dy)]:
+                            if j > i and (x - xx) ** 2 + (y - yy) ** 2 <= d2_max:
+                                union(i, j)
+
+        groups: dict[int, list[int]] = defaultdict(list)
+        for i in range(n):
+            groups[find(i)].append(i)
+        return list(groups.values())
+
+    @staticmethod
+    def _estimate_link_dist(segments: list[PDFSegment]) -> float:
+        """Stima adattiva della distanza di linkage (data-derived, niente costanti assolute).
+
+        p60 della distanza dal piu vicino endpoint appartenente a un ALTRO segmento:
+        cattura il gap intra-simbolo tra tratti, restando sotto la spaziatura
+        inter-componente. Su scala PDF reale (Bryston) ~ 8pt.
+        """
+        if len(segments) < 2:
+            return 10.0
+        from sklearn.neighbors import NearestNeighbors
+
+        pts: list[tuple[float, float]] = []
+        owner: list[int] = []
+        for i, seg in enumerate(segments):
+            pts.append(seg.start)
+            owner.append(i)
+            pts.append(seg.end)
+            owner.append(i)
+        x = np.array(pts)
+        k = min(6, len(pts))
+        nbrs = NearestNeighbors(n_neighbors=k).fit(x)
+        dists, idxs = nbrs.kneighbors(x)
+        nn_other: list[float] = []
+        for r in range(len(pts)):
+            for c in range(1, k):
+                if owner[idxs[r, c]] != owner[r]:
+                    nn_other.append(float(dists[r, c]))
+                    break
+        if not nn_other:
+            return 10.0
+        return max(float(np.percentile(nn_other, 60)), 5.0)
 
     @staticmethod
     def _is_axis_aligned(seg: PDFSegment, tol_deg: float = 5.0) -> bool:
-        """Vero se il segmento è orizzontale o verticale entro tol_deg gradi.
+        """Vero se il segmento e orizzontale o verticale entro tol_deg gradi.
 
         Nei PDF schematics EDA, i fili sono sempre asse-allineati; le linee
         diagonali o curve appartengono ai corpi dei simboli componente.
@@ -123,7 +203,7 @@ class SpatialClusterer:
         dy = abs(seg.end[1] - seg.start[1])
         if dx + dy < 0.1:
             return False
-        angle = math.degrees(math.atan2(dy, dx))  # [0°, 90°]
+        angle = math.degrees(math.atan2(dy, dx))  # [0, 90]
         return angle <= tol_deg or angle >= (90.0 - tol_deg)
 
     @staticmethod
@@ -133,29 +213,43 @@ class SpatialClusterer:
     ) -> tuple[list[PDFSegment], list[PDFSegment]]:
         """Separa wire-candidate da symbol-primitive prima del clustering.
 
-        Criteri wire: asse-allineato (≤5°) AND lunghezza ≥ factor × p25(lunghezze).
-        Il fattore 3× separa i fili lunghi dagli stroke corti dei simboli componente
-        senza dipendere da unità assolute: si adatta alla scala di qualunque PDF.
+        Passo 1 - filtro curva: i segmenti item_type='curve' sono approssimazioni
+        lineari di archi Bezier nei corpi dei simboli (spirali induttori, archi
+        transistor). Non contribuiscono alla connettivita e, con eps~34pt, formano
+        catene dense che creano cluster giganti. Vengono esclusi da entrambe le
+        liste output.
+
+        Passo 2 - wire vs symbol: sui soli segmenti 'line' rimanenti:
+          Wire: asse-allineato (<=5) AND lunghezza >= factor x p25(lunghezze).
+          Il fattore 3x separa fili lunghi dagli stroke corti dei simboli componente
+          senza costanti assolute (scala automaticamente con le coordinate PDF).
 
         Restituisce:
             (symbol_segs, wire_segs)
+            - curve omesse da entrambi, disponibili come page.segments per feature
+              extraction futura se necessario.
 
-        Garantisce comportamento corretto anche su test sintetici con segmenti tutti
-        corti (threshold alta → tutti in symbol_segs → DBSCAN non cambia).
+        Garantisce comportamento invariato su test sintetici con item_type='line'
+        e segmenti tutti corti (threshold alta -> tutti in symbol_segs).
         """
         if not segments:
             return [], []
 
-        lengths = [s.length for s in segments if s.length > 0.1]
+        # Passo 1: rimuovi frammenti Bezier (non contribuiscono a topologia ne a DBSCAN)
+        non_curve = [s for s in segments if s.item_type != "curve"]
+        if not non_curve:
+            return [], []
+
+        lengths = [s.length for s in non_curve if s.length > 0.1]
         if not lengths:
-            return list(segments), []
+            return non_curve, []
 
         p25 = float(np.percentile(lengths, 25))
         threshold = max(5.0, p25 * factor)
 
         wire_segs: list[PDFSegment] = []
         symbol_segs: list[PDFSegment] = []
-        for seg in segments:
+        for seg in non_curve:
             if SpatialClusterer._is_axis_aligned(seg) and seg.length >= threshold:
                 wire_segs.append(seg)
             else:
@@ -163,11 +257,11 @@ class SpatialClusterer:
         return symbol_segs, wire_segs
 
     @staticmethod
-    def _estimate_eps(x: np.ndarray) -> float:
-        """D2: stima epsilon adattivo via k-NN (4° vicino, percentile 90 × 1.5).
+    def _estimate_eps(x: npt.NDArray[np.float64]) -> float:
+        """Stima epsilon adattivo via k-NN (4 vicino, percentile 90 x 1.5).
 
-        pdist (mediana all-pairs) dava eps enormi su schemi grandi → un unico cluster.
-        k-NN usa la densità locale: eps ≈ distanza intra-cluster tipica.
+        Mantenuto per retro-compatibilita (test) e come euristica di scala; il
+        clustering principale usa ora il single-linkage su endpoint.
         """
         if len(x) < 2:
             return 10.0
@@ -175,6 +269,6 @@ class SpatialClusterer:
         k = min(4, len(x) - 1)
         nbrs = NearestNeighbors(n_neighbors=k).fit(x)
         dists, _ = nbrs.kneighbors(x)
-        kth_dists = dists[:, -1]  # distanza al k-esimo vicino per ogni punto
+        kth_dists = dists[:, -1]
         eps = float(np.percentile(kth_dists, 90)) * 1.5
-        return max(eps, 5.0)  # minimo 5pt
+        return max(eps, 5.0)
