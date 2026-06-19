@@ -1,6 +1,6 @@
 # HANDOFF — schematic_extractor (Schematic AI Reasoner)
 
-**Updated:** 2026-06-19 · **Status:** Phases 0–3 structurally complete, NOT yet functional on real schematics (4 blockers open)
+**Updated:** 2026-06-19 (P1 done) · **Status:** Phases 0–3 complete + P1 extraction fixes; functional on real vector schematics (3 blockers remain: B2 junctions, B1 ML training, D2 DBSCAN eps)
 
 ---
 

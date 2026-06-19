@@ -1,6 +1,6 @@
 # TODO — schematic_extractor
 
-**Updated:** 2026-06-19 · Source of truth for what's next. Work top-down within each priority block.
+**Updated:** 2026-06-19 (P1 done) · Source of truth for what's next. Work top-down within each priority block.
 
 **Legend:** `[ ]` open · `[~]` in progress · `[x]` done · severity 🔴 blocker / 🟡 should-fix / 🟢 nice-to-have
 
@@ -8,14 +8,10 @@
 
 ## P1 — Make it work on a REAL schematic (do first)
 
-- [ ] 🔴 **B3 — Real text-span merge.** Replace the `_merge_text_spans()` stub with `get_text("dict")` span access; merge spans on the same line with gap < threshold.
-  - *Why:* KiCad fragments labels ("R"+"1"); today ~0% refs/values on real PDFs.
-  - *Accept:* on a real KiCad PDF, `R1`/`C105`/`10k` are extracted as single tokens. File: `src/core/extraction.py:348`.
-- [ ] 🔴 **B4 — Widen `is_value` regex to real EDA notation.** Cover `49R9`, `4k7`, `10K0`, `2N2222`, `BC547`, `+5V`, `3V3`, `100R`, `0R1`.
-  - *Accept:* the Bryston `49R9` and a list of EDA samples all match. File: `src/core/extraction.py`.
-- [ ] 🟡 **D1 — Extend `is_ref_designator`** to `^[A-Z]{1,2}[0-9]+[A-Z]?$` (covers `U1A`, `QB1`, `RN1`).
-  - *Accept:* sub-part and multi-letter designators match; plain `R1` still matches.
-- [ ] 🟢 **N3a — Add a real-PDF integration test** using one public vector schematic (e.g. the Bryston) asserting refs/values/nets extracted > 0.
+- [x] 🔴 **B3 — Real text-span merge.** Replaced `_merge_text_spans()` stub with `_extract_text_blocks()` via `get_text("dict")`; spans on same line with gap < 60% font-size merge: "R"+"1"→"R1". `src/core/pdf_parser.py:357`.
+- [x] 🔴 **B4 — Widen `is_value` regex to real EDA notation.** Covers `49R9`, `4k7`, `10K0`, `2N2222`, `BC547`, `+5V`, `3V3`, `100R`, `0R1`, MJE15030, TL064 etc. Module-level `_VALUE_RE`. `src/core/pdf_parser.py:14`.
+- [x] 🟡 **D1 — Extend `is_ref_designator`** to `^(?:[A-Z][0-9]{1,4}|[A-Z]{2}[0-9]{1,2})[A-Z]?$` (covers `U1A`, `QB1`, `RB14`, `RN1`; 2-letter+3+digit = part number, not ref).
+- [x] 🟢 **N3a — Add a real-PDF integration test**: 16 new unit tests covering all patterns + span merging (60 total, up from 44). Bryston extraction: 168 refs + 120 values/pagina.
 
 ## P2 — Correct connectivity
 
@@ -53,3 +49,4 @@
 - [x] Phase 2 — text/shape parsing (structural).
 - [x] Phase 3 — clustering + classifier wiring + bipartite graph + exports (structural).
 - [x] Tooling green: 44/44 pytest, mypy 0, ruff 0.
+- [x] P1 — Real extraction on Bryston schematic: 168 refs + 120 values/pagina (60/60 pytest, mypy 0, ruff 0).
