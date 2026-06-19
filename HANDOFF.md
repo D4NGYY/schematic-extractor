@@ -1,6 +1,6 @@
 # HANDOFF — schematic_extractor (Schematic AI Reasoner)
 
-**Updated:** 2026-06-19 (P1 done) · **Status:** Phases 0–3 complete + P1 extraction fixes; functional on real vector schematics (3 blockers remain: B2 junctions, B1 ML training, D2 DBSCAN eps)
+**Updated:** 2026-06-19 (P2 done) · **Status:** Phases 0–3 complete + P1+P2 fixes; functional on real vector schematics (1 blocker remains: B1 ML training)
 
 ---
 
@@ -8,7 +8,7 @@
 
 Pipeline that turns **vector** schematic PDFs into a queryable Components↔Nets graph (export to SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. No OCR — purely geometric extraction (the deliberate alternative to OCR, which is unreliable on schematics).
 
-**Honest current state:** the test suite is green (44/44) but exercises *synthetic/ideal* inputs. On a **real** KiCad/EDA schematic the pipeline would currently extract ~0% of references/values, detect no junctions, and classify every component as `"unknown"`. It is "structurally complete, functionally hollow." The 4 blockers below are what stand between "passes tests" and "works on a real drawing."
+**Honest current state:** the test suite is green (73/73). On the Bryston real schematic: 168 refs, 120 values, 162 junctions detected; DBSCAN gives 7 clusters (1→7 with k-NN eps). Classifier still produces `"unknown"` for all components (B1 not yet fixed). Net reconstruction and graph export work structurally.
 
 ## 2. Goal & scope
 
@@ -45,16 +45,16 @@ Ground truth: KiCad .kicad_sch → coords → auto-labeled training set (no manu
 
 ### 🔴 Blockers (output is unusable on real schematics until fixed)
 - **B1 — ML classifier inert.** No training set, no `fit()` call, no `models/`. Every component → `"unknown"`, confidence 0.0. (`classifier.py`, `graph_builder.py:116`)
-- **B2 — Junction detection unreachable.** No code path ever creates `PDFShape(item_type="circle")`; `junction_candidates()` always returns `[]`. Must read drawing-level circles from PyMuPDF `get_drawings()`. (`extraction.py`)
+- ~~**B2** — Junction detection: FIXED. `_try_extract_circle()` in `pdf_parser.py`; 162 junctions on Bryston.~~
 - **B3 — `_merge_text_spans()` is a stub.** KiCad fragments labels ("R"+"1" → "R 1"); refs/values don't match. Use `get_text("dict")` spans merged by line + gap. (`extraction.py:348`)
 - **B4 — `is_value` regex too narrow.** Misses `49R9`, `4k7`, `10K0`, `2N2222`, `+5V`, `3V3`, `100R`… Needs EDA R-notation + part-number + voltage patterns. (`extraction.py`)
 
 ### 🟡 Should-fix
 - **D1** `is_ref_designator` misses `U1A`, `QB1`, multi-letter/suffix designators.
-- **D2** DBSCAN eps via `pdist` (all-pairs median) → huge eps on large schematics → one giant cluster. Use k-NN distance percentile.
-- **D3** Pin assignment = 4 bbox-corner virtual pins → wrong topology for 2-pin / multi-pin parts.
-- **D4** `_nearest_cluster` dict-key collision silently drops refs (two refs nearest same cluster).
-- **D5** TextAssociator (shapes) vs `_nearest_cluster` (DBSCAN centroids) — incoherent double mapping.
+- ~~**D2** eps pdist: FIXED — k-NN p90×1.5; Bryston 1→7 cluster.~~
+- **D3** Pin assignment = 4 bbox-corner virtual pins → wrong topology for 2-pin / multi-pin parts. Minimum fix (drop unconnected) already in place; full fix needs symbol geometry (P3).
+- ~~**D4** collision: FIXED — dict-of-list + min(distance).~~
+- **D5** TextAssociator/DBSCAN two-step mapping still conceptually split; minimal fix (`symbol_center` in `_nearest_cluster`) applied. Full reconciliation deferred to P3.
 - **D6** `_segments_touch()` fixed 1.0px tolerance, not format-aware.
 - **D7** `export_json()` uses inline `open()`/`import json` vs `path.write_text()` elsewhere.
 
@@ -62,12 +62,10 @@ Ground truth: KiCad .kicad_sch → coords → auto-labeled training set (no manu
 - N1 HANDOFF/README stale (claimed 10 mypy errors — already 0). N2 perf O(n²/n³) on large schematics. N3 test-coverage gaps (no real-PDF test, no topological-correctness test). N4 `node_id` may collide with real `U1`. N5 `stub_length` not configurable.
 
 ## 6. Next steps (ordered)
-1. B3 + B4 + D1 — text-span merge & value/ref regex (unblocks any real-schematic test).
-2. B2 — junction detection (read drawing-level circles).
-3. D2 — DBSCAN eps via k-NN.
-4. B1 — ML training pipeline (or interim rule-based classifier from feature vectors).
-5. D3/D4/D5 — pin & association correctness.
-6. Then Phase 4 (ERC) → Phase 5 (LLM tools + benchmark) → Phase 6 (UI).
+1. **B1 — ML training** (or interim rule-based classifier): currently every component → `"unknown"`. Options: train RF on the 7 synthetic `.kicad_sch`, or write a rule-based classifier from the 13 feature vector dimensions.
+2. **D3 full** — real pin positions from symbol geometry (after B1, so we know component class → pin count/layout).
+3. **D5 full** — collapse TextAssociator+`_nearest_cluster` into one pass using DBSCAN cluster bboxes directly.
+4. Then Phase 4 (ERC) → Phase 5 (LLM tools + benchmark) → Phase 6 (UI).
 
 ## 7. Run / test
 ```

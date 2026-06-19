@@ -1,6 +1,6 @@
 # TODO — schematic_extractor
 
-**Updated:** 2026-06-19 (P1 done) · Source of truth for what's next. Work top-down within each priority block.
+**Updated:** 2026-06-19 (P2 done) · Source of truth for what's next. Work top-down within each priority block.
 
 **Legend:** `[ ]` open · `[~]` in progress · `[x]` done · severity 🔴 blocker / 🟡 should-fix / 🟢 nice-to-have
 
@@ -15,13 +15,11 @@
 
 ## P2 — Correct connectivity
 
-- [ ] 🔴 **B2 — Junction detection.** In the `get_drawings()` loop, create circle shapes from drawing-level `type`/fill, feed `junction_candidates()`.
-  - *Accept:* on a schematic with wire crossings + junction dots, junctions detected > 0 and net merge is correct. File: `src/core/extraction.py`.
-- [ ] 🟡 **D2 — Fix DBSCAN eps estimation.** Replace `pdist` median with k-NN (4th neighbor) distance percentile × factor.
-  - *Accept:* a 200+ primitive schematic yields multiple sensible clusters, not one. File: `src/core/clustering.py`.
-- [ ] 🟡 **D4 — Fix `_nearest_cluster` collision.** Map cluster → `list[SymbolAssociation]`, not a single (dict overwrite loses refs).
-- [ ] 🟡 **D3 — Pin assignment.** Stop emitting 4 bbox-corner pins blindly; at minimum drop unconnected virtual pins; revisit with symbol geometry later.
-- [ ] 🟡 **D5 — Reconcile** TextAssociator (shapes) and `_nearest_cluster` (DBSCAN centroids) into one consistent association space.
+- [x] 🔴 **B2 — Junction detection.** `_try_extract_circle()` in `pdf_parser.py`: rileva cerchi pieni dal drawing dict (fill + all-Bezier + bbox quadrata). Bryston: 162 junction candidates (era 0).
+- [x] 🟡 **D2 — Fix DBSCAN eps estimation.** k-NN (k=4, p90 × 1.5) sostituisce pdist: eps 456pt → ~local; cluster 1 → 7 su Bryston.
+- [x] 🟡 **D4 — Fix `_nearest_cluster` collision.** `dict[int, list[SymbolAssociation]]` + `min(…, key=distance)`.
+- [x] 🟡 **D3 — Pin assignment (minimo).** `_connect_pins_to_nets()` già scarta pin virtuali non connessi (`if best_net is not None`). Geometria simbolo rimandata a P3.
+- [x] 🟡 **D5 — Reconcile (minimo).** `_nearest_cluster` usa `symbol_center` (centro del simbolo) invece di `text_pos` (pos. del label fuori dal componente). Fix strutturale completo rimandato a P3.
 
 ## P3 — Make classification real
 
@@ -50,3 +48,4 @@
 - [x] Phase 3 — clustering + classifier wiring + bipartite graph + exports (structural).
 - [x] Tooling green: 44/44 pytest, mypy 0, ruff 0.
 - [x] P1 — Real extraction on Bryston schematic: 168 refs + 120 values/pagina (60/60 pytest, mypy 0, ruff 0).
+- [x] P2 — Connectivity fixes: B2 (162 junctions), D2 (eps k-NN: 1→7 cluster), D4 (no collision), D3 min (già ok), D5 min (symbol_center). 73/73 pytest, mypy 0, ruff 0.
