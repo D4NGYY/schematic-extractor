@@ -1,0 +1,19 @@
+{
+  "components": [
+    {
+      "ref": "R1",
+      "class": "unknown",
+      "value": "1k",
+      "confidence": 0.0,
+      "bbox": [
+        -5,
+        -5,
+        10,
+        10
+      ],
+      "pins": []
+    }
+  ],
+  "nets": [],
+  "edges": []
+}

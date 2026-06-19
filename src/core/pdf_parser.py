@@ -1,0 +1,432 @@
+from __future__ import annotations
+
+import math
+import re
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+import structlog
+
+logger = structlog.get_logger("pdf_parser")
+
+
+class PDFSourceFormat(Enum):
+    """Formato di origine dello schema PDF."""
+    KICAD = "kicad"
+    ALTIUM = "altium"
+    EAGLE = "eagle"
+    GENERIC = "generic"
+    UNKNOWN = "unknown"
+
+
+class PDFFormatClassifier:
+    """Classifica il formato di origine di uno schema PDF tramite euristiche.
+
+    Euristiche usate (in ordine di affidabilità):
+    1. Metadati XMP / Producer (es. "KiCad", "Altium")
+    2. Font embedding (font EDA specifici)
+    3. Pattern di testo (ref des, net labels, pagine specifiche)
+    4. Struttura pagina (dimensioni, griglia, margine)
+    """
+
+    _PRODUCER_PATTERNS: dict[str, PDFSourceFormat] = {
+        "kicad": PDFSourceFormat.KICAD,
+        "altium": PDFSourceFormat.ALTIUM,
+        "eagle": PDFSourceFormat.EAGLE,
+    }
+
+    def classify(self, pdf_path: Path | str) -> PDFSourceFormat:
+        """Classifica il PDF e ritorna il formato di origine."""
+        pdf_path = Path(pdf_path)
+        try:
+            import fitz  # PyMuPDF
+        except ImportError:
+            logger.warning("PyMuPDF not installed, falling back to generic")
+            return PDFSourceFormat.GENERIC
+
+        doc = fitz.open(str(pdf_path))
+        fmt = self._classify_doc(doc)
+        doc.close()
+        logger.info("PDF classified", file=str(pdf_path), format=fmt.value)
+        return fmt
+
+    def _classify_doc(self, doc: Any) -> PDFSourceFormat:
+        # 1. Metadati Producer / Creator
+        metadata = doc.metadata or {}
+        producer = (metadata.get("producer", "") + metadata.get("creator", "")).lower()
+        for pattern, fmt in self._PRODUCER_PATTERNS.items():
+            if pattern in producer:
+                return fmt
+
+        # 2. Pattern di testo nella prima pagina
+        if len(doc) > 0:
+            text = doc[0].get_text()
+            if "Sheet" in text and "Date:" in text and re.search(r"[A-Z]\d{1,4}", text):
+                return PDFSourceFormat.ALTIUM
+            if "KICAD" in text.upper() or ".kicad_sch" in text:
+                return PDFSourceFormat.KICAD
+
+        # 3. Dimensione pagina (KiCad default A4 = 595x842 pt)
+        if len(doc) > 0:
+            rect = doc[0].rect
+            if abs(rect.width - 595) < 5 and abs(rect.height - 842) < 5:
+                # Potrebbe essere KiCad o generico A4
+                pass
+
+        return PDFSourceFormat.UNKNOWN
+
+
+@dataclass
+class PDFSegment:
+    """Segmento vettoriale estratto da PDF (linea o arco)."""
+    start: tuple[float, float]
+    end: tuple[float, float]
+    stroke_width: float = 0.0
+    color: tuple[int, int, int] | None = None
+    item_type: str = "line"  # "line", "arc", "curve", "rect"
+
+    @property
+    def length(self) -> float:
+        return math.hypot(
+            self.end[0] - self.start[0], self.end[1] - self.start[1]
+        )
+
+    def midpoint(self) -> tuple[float, float]:
+        return (
+            (self.start[0] + self.end[0]) / 2,
+            (self.start[1] + self.end[1]) / 2,
+        )
+
+
+@dataclass
+class PDFTextBlock:
+    """Blocco di testo estratto da PDF con metadati geometrici."""
+    text: str
+    bbox: tuple[float, float, float, float]  # x0, y0, x1, y1
+    font_size: float = 0.0
+    font_name: str = ""
+    is_bold: bool = False
+
+    @property
+    def center(self) -> tuple[float, float]:
+        return (
+            (self.bbox[0] + self.bbox[2]) / 2,
+            (self.bbox[1] + self.bbox[3]) / 2,
+        )
+
+    @property
+    def is_ref_designator(self) -> bool:
+        """Regex: ^[A-Z][0-9]+$ per identificare Ref Designator."""
+        return bool(re.match(r"^[A-Z][0-9]+$", self.text.strip()))
+
+    @property
+    def is_value(self) -> bool:
+        """Euristiche per valore componente (es. 1k, 10uF, 2N2222)."""
+        val = self.text.strip()
+        return bool(re.match(r"^[0-9]+[.0-9]*\s*[a-zA-ZΩµμ]+[FfHhΩ]?$", val))
+
+    @property
+    def is_net_label(self) -> bool:
+        """Label di net (non ref, non value, non vuota)."""
+        text = self.text.strip()
+        if not text or len(text) > 50:
+            return False
+        # Esclude ref e value, include nomi tipo GND, VCC, SIG, ecc.
+        if self.is_ref_designator or self.is_value:
+            return False
+        return bool(re.match(r"^[A-Za-z0-9_+/\-]+$", text))
+
+
+@dataclass
+class PDFShape:
+    """Forma chiusa estratta da PDF (circolo, rettangolo, poligono)."""
+    vertices: list[tuple[float, float]] = field(default_factory=list)
+    item_type: str = "polygon"  # "polygon", "circle", "rect"
+    fill_color: tuple[int, int, int] | None = None
+    stroke_color: tuple[int, int, int] | None = None
+
+    @property
+    def bbox(self) -> tuple[float, float, float, float]:
+        xs = [v[0] for v in self.vertices]
+        ys = [v[1] for v in self.vertices]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    @property
+    def area(self) -> float:
+        if self.item_type == "circle":
+            # Approssimazione: diametro dalla bbox
+            w = self.bbox[2] - self.bbox[0]
+            h = self.bbox[3] - self.bbox[1]
+            r = (w + h) / 4
+            return math.pi * r * r
+        if self.item_type == "rect":
+            w = self.bbox[2] - self.bbox[0]
+            h = self.bbox[3] - self.bbox[1]
+            return w * h
+        # Poligono: shoelace formula
+        return self._polygon_area()
+
+    def _polygon_area(self) -> float:
+        area = 0.0
+        n = len(self.vertices)
+        for i in range(n):
+            x1, y1 = self.vertices[i]
+            x2, y2 = self.vertices[(i + 1) % n]
+            area += x1 * y2 - x2 * y1
+        return abs(area) / 2.0
+
+    @property
+    def is_filled_circle(self) -> bool:
+        """Verifica se è un cerchio pieno (junction dot candidate)."""
+        if self.item_type != "circle":
+            return False
+        if self.fill_color is None:
+            return False
+        # Diametro tipico junction dot: 0.3-1.0 mm ≈ 1-3 pt @ 72 DPI
+        w = self.bbox[2] - self.bbox[0]
+        h = self.bbox[3] - self.bbox[1]
+        return 0.5 < w < 5.0 and 0.5 < h < 5.0 and abs(w - h) < 1.0
+
+
+@dataclass
+class ExtractedPage:
+    """Risultato dell'estrazione di una singola pagina PDF."""
+    page_num: int
+    segments: list[PDFSegment] = field(default_factory=list)
+    text_blocks: list[PDFTextBlock] = field(default_factory=list)
+    shapes: list[PDFShape] = field(default_factory=list)
+    raw_rect: tuple[float, float, float, float] = (0, 0, 0, 0)
+
+    def all_wire_segments(self) -> list[PDFSegment]:
+        """Filtra solo i segmenti che sembrano wire (linee rette, non archi)."""
+        return [s for s in self.segments if s.item_type == "line"]
+
+    def ref_blocks(self) -> list[PDFTextBlock]:
+        return [t for t in self.text_blocks if t.is_ref_designator]
+
+    def value_blocks(self) -> list[PDFTextBlock]:
+        return [t for t in self.text_blocks if t.is_value]
+
+    def net_label_blocks(self) -> list[PDFTextBlock]:
+        return [t for t in self.text_blocks if t.is_net_label]
+
+    def junction_candidates(self) -> list[PDFShape]:
+        return [s for s in self.shapes if s.is_filled_circle]
+
+
+class VectorExtractor:
+    """Estrae elementi vettoriali (segmenti, testo, forme) da PDF tramite PyMuPDF.
+
+    Pipeline per pagina:
+    1. `get_drawings()` → segmenti, archi, forme
+    2. `get_text("blocks")` → blocchi di testo con bbox
+    3. Unisce span frammentati basandosi *esclusivamente su geometria* (no font name)
+    """
+
+    def __init__(self, dpi: int = 300) -> None:
+        self.dpi = dpi
+        self.scale = dpi / 72.0  # PDF native è 72 DPI
+
+    def extract(self, pdf_path: Path | str) -> list[ExtractedPage]:
+        """Estrae tutte le pagine del PDF."""
+        pdf_path = Path(pdf_path)
+        import fitz
+
+        doc = fitz.open(str(pdf_path))
+        pages: list[ExtractedPage] = []
+
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            extracted = self._extract_page(page, page_num)
+            pages.append(extracted)
+            logger.info(
+                "Extracted page",
+                page=page_num,
+                segments=len(extracted.segments),
+                texts=len(extracted.text_blocks),
+                shapes=len(extracted.shapes),
+            )
+
+        doc.close()
+        logger.info(
+            "PDF extraction complete",
+            file=str(pdf_path),
+            pages=len(pages),
+        )
+        return pages
+
+    def _extract_page(self, page: Any, page_num: int) -> ExtractedPage:
+        result = ExtractedPage(page_num=page_num, raw_rect=page.rect)
+
+        # 1. Disegni vettoriali (linee, archi, rettangoli, cerchi)
+        drawings = page.get_drawings()
+        for drawing in drawings:
+            items = drawing.get("items", [])
+            for item in items:
+                parsed = self._parse_drawing_item(item)
+                if parsed is not None:
+                    if isinstance(parsed, PDFSegment):
+                        result.segments.append(parsed)
+                    elif isinstance(parsed, PDFShape):
+                        result.shapes.append(parsed)
+
+        # 2. Testo - usa get_text("blocks") per blocchi con bbox
+        text_blocks = page.get_text("blocks")
+        for block in text_blocks:
+            # block: (x0, y0, x1, y1, text, block_no, block_type)
+            x0, y0, x1, y1, text, *_ = block
+            # Unisce span frammentati su stessa linea (stessa y, distanza < 3x font_size)
+            merged_text = self._merge_text_spans(text, x0, y0, x1, y1)
+            result.text_blocks.append(
+                PDFTextBlock(
+                    text=merged_text,
+                    bbox=(x0, y0, x1, y1),
+                )
+            )
+
+        # 3. Post-processing: merge segmenti collineari (come wire_merge)
+        result.segments = self._merge_collinear_segments(result.segments)
+
+        return result
+
+    def _parse_drawing_item(self, item: tuple[Any, ...]) -> PDFSegment | PDFShape | None:
+        """Parse di un singolo item da page.get_drawings().
+
+        PyMuPDF get_drawings() ritorna items come:
+        - ('l', p1, p2) → linea
+        - ('c', p1, p2, p3, p4) → curva di Bézier
+        - ('re', rect) → rettangolo
+        - ('qu', p1, p2, p3) → quadratic Bezier
+        """
+        kind = item[0]
+
+        if kind == "l":
+            # Linea: ('l', (x1,y1), (x2,y2))
+            p1, p2 = item[1], item[2]
+            return PDFSegment(
+                start=(float(p1[0]), float(p1[1])),
+                end=(float(p2[0]), float(p2[1])),
+                item_type="line",
+            )
+
+        if kind == "c":
+            # Cubic Bezier: approssima con segmento retto tra start e end
+            p1, p4 = item[1], item[4]
+            return PDFSegment(
+                start=(float(p1[0]), float(p1[1])),
+                end=(float(p4[0]), float(p4[1])),
+                item_type="curve",
+            )
+
+        if kind == "re":
+            # Rettangolo: ('re', rect)
+            rect = item[1]
+            return PDFShape(
+                vertices=[
+                    (rect.x0, rect.y0),
+                    (rect.x1, rect.y0),
+                    (rect.x1, rect.y1),
+                    (rect.x0, rect.y1),
+                ],
+                item_type="rect",
+            )
+
+        if kind == "qu":
+            # Quadratic Bezier: approssima con segmento retto
+            p1, p3 = item[1], item[3]
+            return PDFSegment(
+                start=(float(p1[0]), float(p1[1])),
+                end=(float(p3[0]), float(p3[1])),
+                item_type="curve",
+            )
+
+        # Ignora altri tipi (immagini, clip, etc.)
+        return None
+
+    def _merge_text_spans(
+        self, text: str, x0: float, y0: float, x1: float, y1: float
+    ) -> str:
+        """Unisce span frammentati basandosi su geometria.
+
+        PyMuPDF a volte spezza un'etichetta in più span. Se sono nella stessa
+        riga e vicini, li uniamo.
+        """
+        # Per ora, semplice: ritorna il testo stripped
+        # In futuro: analizzare span individuali con get_text("dict")
+        return text.strip().replace("\n", " ")
+
+    def _merge_collinear_segments(
+        self, segments: list[PDFSegment], tolerance: float = 0.5
+    ) -> list[PDFSegment]:
+        """Unisce segmenti collineari e sovrapposti (versione PDF di wire_merge).
+
+        Algoritmo semplificato: per ogni coppia di segmenti linea, se sono
+        collineari e sovrapposti, li unisce.
+        """
+        if not segments:
+            return segments
+
+        lines = [s for s in segments if s.item_type == "line"]
+        others = [s for s in segments if s.item_type != "line"]
+
+        changed = True
+        max_iter = len(lines) * 2
+        iteration = 0
+
+        while changed and iteration < max_iter:
+            changed = False
+            iteration += 1
+            new_lines: list[PDFSegment] = []
+
+            for seg in lines:
+                merged = False
+                for i, existing in enumerate(new_lines):
+                    merged_seg = self._try_merge(seg, existing, tolerance)
+                    if merged_seg is not None:
+                        new_lines[i] = merged_seg
+                        merged = True
+                        changed = True
+                        break
+                if not merged:
+                    new_lines.append(seg)
+
+            lines = new_lines
+
+        return lines + others
+
+    @staticmethod
+    def _try_merge(
+        a: PDFSegment, b: PDFSegment, tolerance: float
+    ) -> PDFSegment | None:
+        """Tenta di unire due segmenti collineari."""
+        # Verifica collinearità (cross product ≈ 0)
+        ax, ay = a.end[0] - a.start[0], a.end[1] - a.start[1]
+        bx, by = b.end[0] - b.start[0], b.end[1] - b.start[1]
+        cross = ax * by - ay * bx
+        if abs(cross) > tolerance * max(math.hypot(ax, ay), math.hypot(bx, by)):
+            return None
+
+        # Verifica sovrapposizione: 4 punti sulla stessa linea, span <= somma lunghezze
+        points = [a.start, a.end, b.start, b.end]
+
+        # Ordina proiettando sulla direzione dominante
+        if abs(ax) >= abs(ay):
+            points.sort(key=lambda p: p[0])
+        else:
+            points.sort(key=lambda p: p[1])
+
+        span = math.hypot(
+            points[-1][0] - points[0][0], points[-1][1] - points[0][1]
+        )
+        len_a = a.length
+        len_b = b.length
+        if span > len_a + len_b + tolerance:
+            return None
+
+        return PDFSegment(
+            start=points[0],
+            end=points[-1],
+            item_type="line",
+        )

@@ -1,0 +1,370 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import networkx as nx
+import structlog
+
+from src.core.pdf_parser import ExtractedPage, PDFSegment
+from src.core.text_associator import SymbolAssociation, TextAssociator
+from src.ml.classifier import ComponentClassifier
+from src.ml.clustering import ComponentCluster
+
+logger = structlog.get_logger("graph_builder")
+
+
+@dataclass
+class ComponentNode:
+    """Nodo componente nel grafo bipartito."""
+    node_id: str
+    ref: str
+    class_name: str
+    value: str | None = None
+    cluster: ComponentCluster | None = None
+    confidence: float = 0.0
+    bbox: tuple[float, float, float, float] | None = None
+    pins: list[PinNode] = field(default_factory=list)
+
+
+@dataclass
+class PinNode:
+    """Nodo pin (terminale) di un componente."""
+    pin_id: str
+    pin_name: str | None = None
+    position: tuple[float, float] = (0.0, 0.0)
+    is_nc: bool = False  # No Connect
+    connected_net: str | None = None
+
+
+@dataclass
+class NetNode:
+    """Nodo net (rete elettrica) nel grafo bipartito."""
+    net_id: str
+    name: str | None = None
+    segments: list[PDFSegment] = field(default_factory=list)
+    is_global: bool = False
+
+
+class BipartiteGraphBuilder:
+    """Costruisce grafo bipartito Componenti ↔ Nets tramite NetworkX.
+
+    Pipeline:
+    1. Clusterizza segmenti → ComponentCluster
+    2. Classifica ogni cluster → ComponentNode
+    3. Associa testo (Ref/Value) → ComponentNode
+    4. Trova connessioni cluster-to-net via pin-point matching
+    5. Esporta netlist SPICE (.cir) e KiCad (.net)
+    """
+
+    def __init__(
+        self,
+        classifier: ComponentClassifier | None = None,
+        text_associator: TextAssociator | None = None,
+        stub_length: float = 3.0,  # px
+    ) -> None:
+        self.classifier = classifier or ComponentClassifier()
+        self.text_associator = text_associator or TextAssociator()
+        self.stub_length = stub_length
+        self.graph = nx.Graph()
+        self.components: dict[str, ComponentNode] = {}
+        self.nets: dict[str, NetNode] = {}
+
+    def build_from_page(self, page: ExtractedPage) -> nx.Graph:
+        """Costruisce il grafo bipartito da una pagina estratta."""
+        from src.ml.clustering import SpatialClusterer
+
+        # 1. Clustering spaziale
+        clusterer = SpatialClusterer()
+        clusters = clusterer.cluster(page.segments, page.shapes)
+
+        # 2. Associazione testo
+        refs, values, _ = self.text_associator.associate(page)
+        ref_map = {self._nearest_cluster(r, clusters): r for r in refs}
+        val_map = {self._nearest_cluster(v, clusters): v for v in values}
+
+        # 3. Classifica e crea nodi componente
+        for cluster in clusters:
+            comp = self._create_component_node(cluster, ref_map, val_map)
+            self.components[comp.node_id] = comp
+            self.graph.add_node(comp.node_id, bipartite=0, **comp.__dict__)
+
+        # 4. Trova nets: BFS sui segmenti non assegnati ai cluster
+        self._build_nets(page, clusters)
+
+        # 5. Pin-point matching: connetti pin ai nets
+        self._connect_pins_to_nets(page)
+
+        logger.info(
+            "Graph built",
+            components=len(self.components),
+            nets=len(self.nets),
+            edges=self.graph.number_of_edges(),
+        )
+        return self.graph
+
+    def _create_component_node(
+        self,
+        cluster: ComponentCluster,
+        ref_map: dict[int, SymbolAssociation],
+        val_map: dict[int, SymbolAssociation],
+    ) -> ComponentNode:
+        """Crea un ComponentNode da un cluster con classificazione e testo."""
+        class_name, confidence = "unknown", 0.0
+        try:
+            class_name, confidence = self.classifier.predict(cluster)
+        except RuntimeError:
+            logger.debug("Classifier not trained, using 'unknown' fallback")
+        ref = ref_map.get(cluster.cluster_id)
+        val = val_map.get(cluster.cluster_id)
+
+        ref_text = ref.text if ref else f"U{cluster.cluster_id}"
+        val_text = val.text if val else None
+
+        return ComponentNode(
+            node_id=ref_text,
+            ref=ref_text,
+            class_name=class_name,
+            value=val_text,
+            cluster=cluster,
+            confidence=confidence,
+            bbox=cluster.bbox,
+        )
+
+    @staticmethod
+    def _nearest_cluster(
+        assoc: SymbolAssociation, clusters: list[ComponentCluster]
+    ) -> int:
+        """Trova l'indice del cluster più vicino a un'associazione testo."""
+        best = -1
+        best_dist = float("inf")
+        tx, ty = assoc.text_pos
+        for cluster in clusters:
+            cx, cy = cluster.center
+            dist = ((tx - cx) ** 2 + (ty - cy) ** 2) ** 0.5
+            if dist < best_dist:
+                best_dist = dist
+                best = cluster.cluster_id
+        return best
+
+    def _build_nets(self, page: ExtractedPage, clusters: list[ComponentCluster]) -> None:
+        """Costruisce nets connettendo segmenti non appartenenti a cluster isolati."""
+        # Segmenti non usati dai cluster (o condivisi)
+        used = set()
+        for cluster in clusters:
+            for seg in cluster.segments:
+                used.add(id(seg))
+
+        all_segments = [s for s in page.segments if id(s) not in used]
+        if not all_segments:
+            # Se tutti i segmenti sono in cluster, i nets sono i collegamenti tra cluster
+            # Per ora: crea un net per ogni connessione trovata in _connect_pins_to_nets
+            return
+
+        # BFS sui segmenti (simile a kicad_net_reconstructor)
+        visited = set()
+        net_counter = 0
+
+        for seg in all_segments:
+            if id(seg) in visited:
+                continue
+            net_counter += 1
+            net = NetNode(net_id=f"N{net_counter}", name=f"Net-{net_counter}")
+            stack = [seg]
+            while stack:
+                current = stack.pop()
+                if id(current) in visited:
+                    continue
+                visited.add(id(current))
+                net.segments.append(current)
+
+                # Trova segmenti connessi (estremità vicine)
+                for other in all_segments:
+                    if id(other) in visited:
+                        continue
+                    if self._segments_touch(current, other):
+                        stack.append(other)
+
+            self.nets[net.net_id] = net
+            self.graph.add_node(net.net_id, bipartite=1, **net.__dict__)
+
+    def _segments_touch(self, a: PDFSegment, b: PDFSegment, tol: float = 1.0) -> bool:
+        """Verifica se due segmenti si toccano (estremità vicine)."""
+        ends_a = [a.start, a.end]
+        ends_b = [b.start, b.end]
+        for ea in ends_a:
+            for eb in ends_b:
+                if ((ea[0] - eb[0]) ** 2 + (ea[1] - eb[1]) ** 2) ** 0.5 < tol:
+                    return True
+        return False
+
+    def _connect_pins_to_nets(self, page: ExtractedPage) -> None:
+        """Connette i pin dei componenti ai nets via stub matching."""
+        # Per ogni componente, estende stub virtuali dai bordi del bbox
+        # e vede se interseca un net
+        for comp in self.components.values():
+            if comp.bbox is None:
+                continue
+            x0, y0, x1, y1 = comp.bbox
+            # 4 punti cardinali (centri dei lati)
+            pin_candidates = [
+                ("1", (x0, (y0 + y1) / 2)),  # sinistra
+                ("2", (x1, (y0 + y1) / 2)),  # destra
+                ("3", ((x0 + x1) / 2, y0)),  # sopra
+                ("4", ((x0 + x1) / 2, y1)),  # sotto
+            ]
+            for pin_name, pin_pos in pin_candidates:
+                # Cerca il net più vicino con estensione stub
+                best_net = self._find_net_with_stub(pin_pos, self.stub_length)
+                if best_net is not None:
+                    pin = PinNode(
+                        pin_id=f"{comp.node_id}_{pin_name}",
+                        pin_name=pin_name,
+                        position=pin_pos,
+                        connected_net=best_net.net_id,
+                    )
+                    comp.pins.append(pin)
+                    self.graph.add_edge(comp.node_id, best_net.net_id, pin=pin)
+
+    def _find_net_with_stub(
+        self, pin_pos: tuple[float, float], stub_len: float
+    ) -> NetNode | None:
+        """Estende uno stub dal pin e cerca un net che interseca."""
+        # 4 direzioni ortogonali
+        directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        best_net = None
+        best_dist = float("inf")
+
+        for dx, dy in directions:
+            stub_end = (pin_pos[0] + dx * stub_len, pin_pos[1] + dy * stub_len)
+            stub = PDFSegment(start=pin_pos, end=stub_end, item_type="line")
+
+            for net in self.nets.values():
+                for seg in net.segments:
+                    if self._segments_intersect(stub, seg):
+                        dist = ((pin_pos[0] - seg.midpoint()[0]) ** 2 +
+                                (pin_pos[1] - seg.midpoint()[1]) ** 2) ** 0.5
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_net = net
+
+        return best_net
+
+    @staticmethod
+    def _segments_intersect(a: PDFSegment, b: PDFSegment) -> bool:
+        """Verifica intersezione tra due segmenti (AABB + orientamento)."""
+        # Bounding box overlap
+        ax_min, ax_max = min(a.start[0], a.end[0]), max(a.start[0], a.end[0])
+        ay_min, ay_max = min(a.start[1], a.end[1]), max(a.start[1], a.end[1])
+        bx_min, bx_max = min(b.start[0], b.end[0]), max(b.start[0], b.end[0])
+        by_min, by_max = min(b.start[1], b.end[1]), max(b.start[1], b.end[1])
+
+        if ax_max < bx_min or bx_max < ax_min or ay_max < by_min or by_max < ay_min:
+            return False
+
+        # Orientamento cross-product
+        def cross(ax: float, ay: float, bx: float, by: float, cx: float, cy: float) -> float:
+            return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+
+        c1 = float(cross(a.start[0], a.start[1], a.end[0], a.end[1], b.start[0], b.start[1]))
+        c2 = float(cross(a.start[0], a.start[1], a.end[0], a.end[1], b.end[0], b.end[1]))
+        c3 = float(cross(b.start[0], b.start[1], b.end[0], b.end[1], a.start[0], a.start[1]))
+        c4 = float(cross(b.start[0], b.start[1], b.end[0], b.end[1], a.end[0], a.end[1]))
+
+        return bool((c1 * c2 < 0) and (c3 * c4 < 0))
+
+    # ===================== EXPORT =====================
+
+    def export_spice(self, output_path: Path | str) -> None:
+        """Esporta netlist SPICE strutturale (.cir) senza modelli."""
+        path = Path(output_path)
+        lines = ["* Schematic AI Reasoner - SPICE Structural Netlist", ""]
+
+        for comp in self.components.values():
+            pins_str = " ".join(p.connected_net or p.pin_id for p in comp.pins)
+            lines.append(f"{comp.ref} {pins_str} {comp.class_name}")
+
+        lines.append("")
+        lines.append(".end")
+
+        path.write_text("\n".join(lines), encoding="utf-8")
+        logger.info("SPICE exported", path=str(path))
+
+    def export_kicad_netlist(self, output_path: Path | str) -> None:
+        """Esporta netlist in formato KiCad (.net)."""
+        path = Path(output_path)
+        lines = [
+            "(export (version D)",
+            "  (design",
+            "    (source \"extracted.pdf\")",
+            "  )",
+            "  (components",
+        ]
+
+        for comp in self.components.values():
+            lines.append(f'    (comp (ref "{comp.ref}")')
+            lines.append(f'      (value "{comp.value or comp.class_name}")')
+            lines.append("    )")
+
+        lines.append("  )")
+        lines.append("  (nets")
+
+        for i, net in enumerate(self.nets.values(), 1):
+            lines.append(f'    (net (code "{i}") (name "{net.name or net.net_id}")')
+            for comp in self.components.values():
+                for pin in comp.pins:
+                    if pin.connected_net == net.net_id:
+                        lines.append(f'      (node (ref "{comp.ref}") (pin "{pin.pin_name}"))')
+            lines.append("    )")
+
+        lines.append("  )")
+        lines.append(")")
+
+        path.write_text("\n".join(lines), encoding="utf-8")
+        logger.info("KiCad netlist exported", path=str(path))
+
+    def export_json(self, output_path: Path | str) -> dict[str, Any]:
+        """Esporta grafo in formato JSON strutturato."""
+        path = Path(output_path)
+        data = {
+            "components": [
+                {
+                    "ref": c.ref,
+                    "class": c.class_name,
+                    "value": c.value,
+                    "confidence": c.confidence,
+                    "bbox": c.bbox,
+                    "pins": [
+                        {
+                            "pin_id": p.pin_id,
+                            "pin_name": p.pin_name,
+                            "position": p.position,
+                            "net": p.connected_net,
+                            "nc": p.is_nc,
+                        }
+                        for p in c.pins
+                    ],
+                }
+                for c in self.components.values()
+            ],
+            "nets": [
+                {
+                    "net_id": n.net_id,
+                    "name": n.name,
+                    "is_global": n.is_global,
+                    "segments": len(n.segments),
+                }
+                for n in self.nets.values()
+            ],
+            "edges": [
+                {"comp": u, "net": v}
+                for u, v in self.graph.edges()
+                if u in self.components and v in self.nets
+            ],
+        }
+        import json
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        logger.info("JSON exported", path=str(path))
+        return data

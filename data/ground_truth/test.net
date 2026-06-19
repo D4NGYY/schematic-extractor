@@ -1,0 +1,12 @@
+(export (version D)
+  (design
+    (source "extracted.pdf")
+  )
+  (components
+    (comp (ref "R1")
+      (value "unknown")
+    )
+  )
+  (nets
+  )
+)
