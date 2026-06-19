@@ -2,9 +2,9 @@
   "components": [
     {
       "ref": "R1",
-      "class": "unknown",
+      "class": "resistor",
       "value": "1k",
-      "confidence": 0.0,
+      "confidence": 0.95,
       "bbox": [
         -5,
         -5,

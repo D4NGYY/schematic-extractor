@@ -1,6 +1,6 @@
 # HANDOFF — schematic_extractor (Schematic AI Reasoner)
 
-**Updated:** 2026-06-19 (wire/symbol separation) · **Status:** Phases 0–4 + D6 + wire/symbol separation; Bryston: edges 1→9, isolated 6→3; bottleneck residuo = frammenti Bezier arco nei symbol_segs che incatenano i cluster
+**Updated:** 2026-06-19 (endpoint single-linkage clustering) · **Status:** Phases 0–4 + D6 + wire/symbol separation + single-linkage clustering; Bryston: edges 9→35, blob WB1 eliminato; bottleneck ora = pin→net (D3) + over-segmentation (63 cluster, 34 isolati)
 
 ---
 
@@ -8,7 +8,7 @@
 
 Pipeline that turns **vector** schematic PDFs into a queryable Components↔Nets graph (export to SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. No OCR — purely geometric extraction (the deliberate alternative to OCR, which is unreliable on schematics).
 
-**Honest current state:** the test suite is green (135/135). Bryston page 0: 168 refs, 120 values; 8 DBSCAN clusters; 33 wire_segs (6.2–388pt) separati da 513 symbol_segs prima del clustering; 71% classified; 33 nets; 9 edges; 3/8 components isolated. ERC: 28 err + 7 warn = 35. Residual bottleneck: 483 Bezier arc fragments (~2.7pt, angoli 26°/63°/69°) generate dense point chains → WB1 cluster gigante persiste (794×505pt). Questi sono segmenti quadratici di approssimazione delle curve PyMuPDF (spirali induttori, archi transistor). Finché non vengono filtrati prima di DBSCAN, il cluster gigante rimane. ML classifier (RF) non addestrato; RuleBasedClassifier attivo.
+**Honest current state:** test suite verde (142/142, +7 sul nuovo clustering). Il clustering ora usa **single-linkage sugli endpoint** (non piu midpoint-DBSCAN): il blob WB1 a livello di pagina (177 seg, 794×505pt) e sparito — cluster a scala-componente (top 15/15/12/10/9/8), link_dist adattivo data-derived (~8.6pt su Bryston). Edges 9→35. Il blob mascherava il problema vero: ora emerge l'**over-segmentation** (63 cluster, 34 componenti isolati), dovuta a pin→net debole (D3) e a cluster-rumore a 2 segmenti. ML classifier (RF) non addestrato; RuleBasedClassifier attivo. I 280 frammenti Bezier (item_type='curve') sono gia filtrati da separate_wires.
 
 ## 2. Goal & scope
 

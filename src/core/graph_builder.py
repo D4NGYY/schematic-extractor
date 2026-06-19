@@ -63,11 +63,13 @@ class BipartiteGraphBuilder:
         classifier: ComponentClassifier | None = None,
         text_associator: TextAssociator | None = None,
         stub_length: float = 3.0,  # px
+        cluster_eps: float | None = None,
     ) -> None:
         self.classifier = classifier or ComponentClassifier()
         self.rule_classifier = RuleBasedClassifier()  # B1: attivo finché ML non è addestrato
         self.text_associator = text_associator or TextAssociator()
         self.stub_length = stub_length
+        self.cluster_eps = cluster_eps  # override link_dist del clustering (None = adattivo)
         self.graph = nx.Graph()
         self.components: dict[str, ComponentNode] = {}
         self.nets: dict[str, NetNode] = {}
@@ -82,7 +84,7 @@ class BipartiteGraphBuilder:
         symbol_segs, wire_segs = SpatialClusterer.separate_wires(page.segments)
 
         # 1. Clustering spaziale: SOLO symbol-primitive
-        clusterer = SpatialClusterer()
+        clusterer = SpatialClusterer(eps=self.cluster_eps)
         clusters = clusterer.cluster(symbol_segs, page.shapes)
 
         # 2. Associazione testo

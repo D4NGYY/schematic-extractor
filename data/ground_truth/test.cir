@@ -1,5 +1,5 @@
 * Schematic AI Reasoner - SPICE Structural Netlist
 
-R1  unknown
+R1  resistor
 
 .end

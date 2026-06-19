@@ -4,7 +4,7 @@
   )
   (components
     (comp (ref "R1")
-      (value "unknown")
+      (value "resistor")
     )
   )
   (nets

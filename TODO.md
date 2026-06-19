@@ -39,6 +39,7 @@
 
 - [x] 🟢 **D6** `_estimate_scale()` p10 segment lengths; stub `min(w,h)*0.5`; T-junction `<=0`. Edges 1→4 su Bryston; 127/127 pytest, mypy 0, ruff 0.
 - [x] 🟡 **Wire/symbol separation**: `SpatialClusterer.separate_wires()` (axis-aligned AND ≥p25×3); DBSCAN su soli symbol_segs. Bryston: edges 4→9, isolated 6→3. 135/135 pytest, mypy 0, ruff 0. Bottleneck residuo: frammenti Bezier arco.
+- [x] 🔴 **Clustering single-linkage su endpoint** (sostituisce midpoint-DBSCAN). Union-find sulla prossimita degli endpoint dei segmenti + griglia spaziale O(n); link_dist adattivo data-derived (p60 nearest-other-endpoint, ~8.6pt). Shapes assegnate al gruppo piu vicino, orfane scartate. Bryston: blob WB1 eliminato, edges 9→35, cluster a scala-componente. 142/142 pytest (+7), ruff 0, mypy 0 sul file. Commit f22b2c9. Bottleneck successivo svelato: D3 (pin→net) + over-segmentation.
 - [ ] 🟢 **D7** `export_json()` → `path.write_text()`. **N4** `node_id` collision guard. **N5** configurable `stub_length`.
 - [ ] 🟢 Perf: spatial index for `_merge_collinear_segments()` and `_build_nets()` BFS on large schematics.
 
