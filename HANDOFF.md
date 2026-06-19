@@ -1,6 +1,6 @@
 # HANDOFF — schematic_extractor (Schematic AI Reasoner)
 
-**Updated:** 2026-06-19 (P2 done) · **Status:** Phases 0–3 complete + P1+P2 fixes; functional on real vector schematics (1 blocker remains: B1 ML training)
+**Updated:** 2026-06-19 (P3/B1 done) · **Status:** Phases 0–3 complete + P1+P2+P3 fixes; pipeline funziona su schematics reali con classi significative (nessun blocker rimasto fino a Fase 4)
 
 ---
 
@@ -8,7 +8,7 @@
 
 Pipeline that turns **vector** schematic PDFs into a queryable Components↔Nets graph (export to SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. No OCR — purely geometric extraction (the deliberate alternative to OCR, which is unreliable on schematics).
 
-**Honest current state:** the test suite is green (73/73). On the Bryston real schematic: 168 refs, 120 values, 162 junctions detected; DBSCAN gives 7 clusters (1→7 with k-NN eps). Classifier still produces `"unknown"` for all components (B1 not yet fixed). Net reconstruction and graph export work structurally.
+**Honest current state:** the test suite is green (103/103). On the Bryston real schematic: 168 refs, 120 values, 162 junctions; DBSCAN 7 clusters; classifier rule-based: 71% non-unknown (5/7 components classified). ML classifier path (RF) still untrained — `RuleBasedClassifier` is the active default. Net reconstruction and graph export work structurally.
 
 ## 2. Goal & scope
 
@@ -44,7 +44,7 @@ Ground truth: KiCad .kicad_sch → coords → auto-labeled training set (no manu
 ## 5. Known issues / risks
 
 ### 🔴 Blockers (output is unusable on real schematics until fixed)
-- **B1 — ML classifier inert.** No training set, no `fit()` call, no `models/`. Every component → `"unknown"`, confidence 0.0. (`classifier.py`, `graph_builder.py:116`)
+- ~~**B1** — Classifier inert: FIXED (provvisorio). `RuleBasedClassifier` in `classifier.py`: prefisso→classe (R→resistor, QB→transistor, TP→testpoint…) + fallback geometrico. Bryston: 71% non-unknown. Path ML RF lasciato intatto per training futuro.~~
 - ~~**B2** — Junction detection: FIXED. `_try_extract_circle()` in `pdf_parser.py`; 162 junctions on Bryston.~~
 - **B3 — `_merge_text_spans()` is a stub.** KiCad fragments labels ("R"+"1" → "R 1"); refs/values don't match. Use `get_text("dict")` spans merged by line + gap. (`extraction.py:348`)
 - **B4 — `is_value` regex too narrow.** Misses `49R9`, `4k7`, `10K0`, `2N2222`, `+5V`, `3V3`, `100R`… Needs EDA R-notation + part-number + voltage patterns. (`extraction.py`)
@@ -62,10 +62,11 @@ Ground truth: KiCad .kicad_sch → coords → auto-labeled training set (no manu
 - N1 HANDOFF/README stale (claimed 10 mypy errors — already 0). N2 perf O(n²/n³) on large schematics. N3 test-coverage gaps (no real-PDF test, no topological-correctness test). N4 `node_id` may collide with real `U1`. N5 `stub_length` not configurable.
 
 ## 6. Next steps (ordered)
-1. **B1 — ML training** (or interim rule-based classifier): currently every component → `"unknown"`. Options: train RF on the 7 synthetic `.kicad_sch`, or write a rule-based classifier from the 13 feature vector dimensions.
-2. **D3 full** — real pin positions from symbol geometry (after B1, so we know component class → pin count/layout).
-3. **D5 full** — collapse TextAssociator+`_nearest_cluster` into one pass using DBSCAN cluster bboxes directly.
-4. Then Phase 4 (ERC) → Phase 5 (LLM tools + benchmark) → Phase 6 (UI).
+1. **Phase 4 — ERC** (`src/core/erc.py`): floating pins, isolated components, dangling nets. Now unblocked: we have refs, values, junctions, classes.
+2. **D3 full** — real pin positions from symbol geometry (class known now → pin count/layout per class).
+3. **D5 full** — collapse TextAssociator+`_nearest_cluster` into one pass using DBSCAN cluster bboxes.
+4. **B1 ML upgrade** — train RF on real KiCad→PDF pairs when available; `RuleBasedClassifier` stays as fallback.
+5. Phase 5 (LLM tools + benchmark) → Phase 6 (UI).
 
 ## 7. Run / test
 ```

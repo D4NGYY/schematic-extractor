@@ -8,7 +8,7 @@ import pytest
 from src.core.graph_builder import BipartiteGraphBuilder
 from src.core.pdf_parser import ExtractedPage, PDFSegment, PDFShape, PDFTextBlock
 from src.core.text_associator import SymbolAssociation
-from src.ml.classifier import COMPONENT_CLASSES, ComponentClassifier
+from src.ml.classifier import COMPONENT_CLASSES, ComponentClassifier, RuleBasedClassifier
 from src.ml.clustering import ComponentCluster, SpatialClusterer
 from src.ml.feature_extractor import FeatureExtractor, FeatureVector
 
@@ -280,3 +280,128 @@ class TestD5SymbolCenter:
         )
         result = BipartiteGraphBuilder._nearest_cluster(assoc, [c0, c1])
         assert result == 0
+
+
+def _make_small_cluster(cid: int) -> ComponentCluster:
+    """Cluster minuscolo (power symbol tipico): bbox 10×10, 2 seg, 0 shape."""
+    return ComponentCluster(
+        cluster_id=cid,
+        segments=[
+            PDFSegment(start=(0, 0), end=(5, 0)),
+            PDFSegment(start=(5, 0), end=(5, 5)),
+        ],
+        shapes=[],
+        text_blocks=[],
+        bbox=(0.0, 0.0, 10.0, 10.0),
+        center=(5.0, 5.0),
+    )
+
+
+def _make_large_cluster(cid: int) -> ComponentCluster:
+    """Cluster largo (IC-like): bbox 80×20, 10 seg."""
+    segs = [PDFSegment(start=(i * 5.0, 0), end=(i * 5.0 + 5, 0)) for i in range(10)]
+    return ComponentCluster(
+        cluster_id=cid,
+        segments=segs,
+        shapes=[],
+        text_blocks=[],
+        bbox=(0.0, 0.0, 80.0, 20.0),
+        center=(40.0, 10.0),
+    )
+
+
+class TestRuleBasedClassifierB1:
+    """B1: classificatore rule-based prefisso→classe e fallback geometrico."""
+
+    clf = RuleBasedClassifier()
+
+    # ── segnale primario: prefisso 1 lettera ────────────────────────────────
+
+    @pytest.mark.parametrize("ref,expected_class", [
+        ("R1",   "resistor"),
+        ("C22",  "capacitor"),
+        ("L3",   "inductor"),
+        ("D7",   "diode"),
+        ("Q5",   "transistor"),
+        ("U1",   "ic"),
+        ("U1A",  "ic"),          # gate suffix non influenza il prefisso
+        ("J3",   "connector"),
+        ("P1",   "connector"),
+        ("Y1",   "crystal"),
+        ("X2",   "crystal"),
+        ("F1",   "fuse"),
+        ("T1",   "transformer"),
+        ("K1",   "relay"),
+        ("S1",   "switch"),
+    ])
+    def test_one_letter_prefix(self, ref: str, expected_class: str) -> None:
+        cluster = _make_small_cluster(0)
+        class_name, confidence = self.clf.classify(ref, cluster)
+        assert class_name == expected_class, f"{ref} → {class_name}, atteso {expected_class}"
+        assert confidence >= 0.80
+
+    # ── segnale primario: prefisso 2 lettere con mappa dedicata ─────────────
+
+    @pytest.mark.parametrize("ref,expected_class", [
+        ("TP2",  "testpoint"),
+        ("VR3",  "regulator"),
+        ("SW1",  "switch"),
+        ("IC1",  "ic"),
+        ("RN4",  "resistor"),
+        ("FB1",  "inductor"),
+        ("TR1",  "transformer"),
+    ])
+    def test_two_letter_prefix(self, ref: str, expected_class: str) -> None:
+        cluster = _make_small_cluster(0)
+        class_name, confidence = self.clf.classify(ref, cluster)
+        assert class_name == expected_class, f"{ref} → {class_name}, atteso {expected_class}"
+        assert confidence >= 0.85
+
+    # ── prefissi 2-lettere non in mappa → prima lettera ─────────────────────
+
+    @pytest.mark.parametrize("ref,expected_class", [
+        ("QB1",  "transistor"),  # QB non in mappa → Q → transistor
+        ("RB14", "resistor"),    # RB non in mappa → R → resistor
+        ("DX7",  "diode"),       # DX non in mappa → D → diode
+        ("CB1",  "capacitor"),   # CB non in mappa → C → capacitor
+    ])
+    def test_two_letter_prefix_fallback_to_first(self, ref: str, expected_class: str) -> None:
+        cluster = _make_small_cluster(0)
+        class_name, confidence = self.clf.classify(ref, cluster)
+        assert class_name == expected_class, f"{ref} → {class_name}, atteso {expected_class}"
+        assert confidence >= 0.90
+
+    # ── tutte le classi restituite devono essere in COMPONENT_CLASSES ────────
+
+    def test_all_results_in_component_classes(self) -> None:
+        refs = ["R1", "C1", "L1", "D1", "Q1", "U1", "J1", "Y1", "F1",
+                "T1", "K1", "TP1", "VR1", "SW1", "IC1"]
+        cluster = _make_small_cluster(0)
+        for ref in refs:
+            class_name, _ = self.clf.classify(ref, cluster)
+            assert class_name in COMPONENT_CLASSES, f"{ref} → classe '{class_name}' non in COMPONENT_CLASSES"
+
+    # ── fallback geometrico (nessun ref) ────────────────────────────────────
+
+    def test_no_ref_small_cluster_power_symbol(self) -> None:
+        """Cluster piccolo senza ref → power_symbol (euristico)."""
+        cluster = ComponentCluster(
+            cluster_id=0, segments=[], shapes=[], text_blocks=[],
+            bbox=(0.0, 0.0, 10.0, 10.0), center=(5.0, 5.0),
+        )
+        class_name, confidence = self.clf.classify(None, cluster)
+        assert class_name in COMPONENT_CLASSES
+        assert confidence < 0.70  # fallback geometrico ha confidence bassa
+
+    def test_no_ref_large_ic_cluster(self) -> None:
+        """Cluster largo (AR>3, molti seg) senza ref → ic o unknown."""
+        cluster = _make_large_cluster(0)
+        class_name, confidence = self.clf.classify(None, cluster)
+        assert class_name in COMPONENT_CLASSES
+        assert confidence < 0.70
+
+    def test_confidence_high_when_ref_present(self) -> None:
+        """Con ref il classificatore deve avere confidence ≥ 0.80."""
+        cluster = _make_small_cluster(0)
+        _, confidence = self.clf.classify("R1", cluster)
+        assert confidence >= 0.80

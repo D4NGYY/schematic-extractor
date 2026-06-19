@@ -9,7 +9,7 @@ import structlog
 
 from src.core.pdf_parser import ExtractedPage, PDFSegment
 from src.core.text_associator import SymbolAssociation, TextAssociator
-from src.ml.classifier import ComponentClassifier
+from src.ml.classifier import ComponentClassifier, RuleBasedClassifier
 from src.ml.clustering import ComponentCluster
 
 logger = structlog.get_logger("graph_builder")
@@ -65,6 +65,7 @@ class BipartiteGraphBuilder:
         stub_length: float = 3.0,  # px
     ) -> None:
         self.classifier = classifier or ComponentClassifier()
+        self.rule_classifier = RuleBasedClassifier()  # B1: attivo finché ML non è addestrato
         self.text_associator = text_associator or TextAssociator()
         self.stub_length = stub_length
         self.graph = nx.Graph()
@@ -116,19 +117,22 @@ class BipartiteGraphBuilder:
         val_map: dict[int, list[SymbolAssociation]],
     ) -> ComponentNode:
         """Crea un ComponentNode da un cluster con classificazione e testo."""
-        class_name, confidence = "unknown", 0.0
-        try:
-            class_name, confidence = self.classifier.predict(cluster)
-        except RuntimeError:
-            logger.debug("Classifier not trained, using 'unknown' fallback")
-        # D4: se più ref/val puntano allo stesso cluster, vince quello più vicino
+        # B1: ref calcolato prima della classificazione (è il segnale primario)
         ref_candidates = ref_map.get(cluster.cluster_id, [])
         val_candidates = val_map.get(cluster.cluster_id, [])
         ref = min(ref_candidates, key=lambda a: a.distance) if ref_candidates else None
         val = min(val_candidates, key=lambda a: a.distance) if val_candidates else None
-
         ref_text = ref.text if ref else f"U{cluster.cluster_id}"
         val_text = val.text if val else None
+
+        # Classificazione: ML se addestrato, rule-based altrimenti
+        class_name, confidence = "unknown", 0.0
+        try:
+            class_name, confidence = self.classifier.predict(cluster)
+        except RuntimeError:
+            class_name, confidence = self.rule_classifier.classify(
+                ref.text if ref else None, cluster
+            )
 
         return ComponentNode(
             node_id=ref_text,

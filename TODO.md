@@ -1,6 +1,6 @@
 # TODO — schematic_extractor
 
-**Updated:** 2026-06-19 (P2 done) · Source of truth for what's next. Work top-down within each priority block.
+**Updated:** 2026-06-19 (P3/B1 done) · Source of truth for what's next. Work top-down within each priority block.
 
 **Legend:** `[ ]` open · `[~]` in progress · `[x]` done · severity 🔴 blocker / 🟡 should-fix / 🟢 nice-to-have
 
@@ -23,10 +23,11 @@
 
 ## P3 — Make classification real
 
-- [ ] 🔴 **B1 — Train the classifier (or interim rule-based).**
-  - *Option A:* `scripts/generate_training_data.py` from the 7 synthetic `.kicad_sch` + KiCad→PDF alignment → labeled feature vectors → `clf.fit()` → save to `models/`.
-  - *Option B (faster):* rule-based classifier from feature vector (aspect ratio, segment count, typical shapes) to get non-`unknown` classes before Phase 4.
-  - *Accept:* on the test schematic, components get real classes (R/C/L/Q/U…), not all `"unknown"`.
+- [x] 🔴 **B1 — Classificatore rule-based (provvisorio, sblocca Fase 4).**
+  - `RuleBasedClassifier` in `classifier.py`: mappa 2-lettera poi 1-lettera (R→resistor, QB→transistor, TP→testpoint, VR→regulator…) + fallback geometrico (power_symbol, ic, unknown).
+  - `graph_builder.py`: ref calcolato PRIMA della classificazione (segnale primario); ML usato se addestrato, rule-based altrimenti.
+  - Bryston: 5/7 componenti classificati (71% non-unknown). 30 test aggiunti. 103/103 pytest, mypy 0, ruff 0.
+  - Path ML RF lasciato intatto per training futuro (`ComponentClassifier.fit()` non rimosso).
 
 ## P4 — Phases 4–6 (after P1–P3)
 
@@ -49,3 +50,4 @@
 - [x] Tooling green: 44/44 pytest, mypy 0, ruff 0.
 - [x] P1 — Real extraction on Bryston schematic: 168 refs + 120 values/pagina (60/60 pytest, mypy 0, ruff 0).
 - [x] P2 — Connectivity fixes: B2 (162 junctions), D2 (eps k-NN: 1→7 cluster), D4 (no collision), D3 min (già ok), D5 min (symbol_center). 73/73 pytest, mypy 0, ruff 0.
+- [x] P3/B1 — Rule-based classifier: 71% non-unknown su Bryston (0%→71%). 103/103 pytest, mypy 0, ruff 0.
