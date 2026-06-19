@@ -113,10 +113,17 @@ class SpatialClusterer:
 
     @staticmethod
     def _estimate_eps(x: np.ndarray) -> float:
-        """Stima epsilon adattivo basato su mediana distanza nearest neighbor."""
+        """D2: stima epsilon adattivo via k-NN (4° vicino, percentile 90 × 1.5).
+
+        pdist (mediana all-pairs) dava eps enormi su schemi grandi → un unico cluster.
+        k-NN usa la densità locale: eps ≈ distanza intra-cluster tipica.
+        """
         if len(x) < 2:
             return 10.0
-        from scipy.spatial.distance import pdist
-        dists = pdist(x)
-        eps = float(np.median(dists)) * 2.0
+        from sklearn.neighbors import NearestNeighbors
+        k = min(4, len(x) - 1)
+        nbrs = NearestNeighbors(n_neighbors=k).fit(x)
+        dists, _ = nbrs.kneighbors(x)
+        kth_dists = dists[:, -1]  # distanza al k-esimo vicino per ogni punto
+        eps = float(np.percentile(kth_dists, 90)) * 1.5
         return max(eps, 5.0)  # minimo 5pt

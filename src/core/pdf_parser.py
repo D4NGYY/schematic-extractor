@@ -11,6 +11,18 @@ import structlog
 
 logger = structlog.get_logger("pdf_parser")
 
+# B4: regex per valori EDA reali (E96, standard, part number, tensioni)
+_VALUE_RE = re.compile(
+    r"^(?:"
+    r"[0-9]+[RrKkMmGgNnPpFf][0-9]*"                           # E96/Enotation: 49R9, 100R, 4k7, 22p, 0R1
+    r"|[0-9]+(?:[.][0-9]+)?\s*[kKMGmnupfTμΩµ]{1,2}[FfHhΩzZ]?"  # standard: 1k, 10uF, 4.7nH
+    r"|[+-]?[0-9]+(?:[.][0-9]+)?[Vv]"                         # tensioni: +5V, -24V, 12V
+    r"|[0-9]+[Vv][0-9]+"                                        # frazionali: 3V3
+    r"|[0-9][A-Z][A-Z0-9]{2,}"                                 # JEDEC: 2N2222, 1N4148, 2SC1815
+    r"|[A-Z]{2,4}[0-9]{2,}"                                    # part number: BC547, TL071, MJE3055
+    r")$"
+)
+
 
 class PDFSourceFormat(Enum):
     """Formato di origine dello schema PDF."""
@@ -118,14 +130,17 @@ class PDFTextBlock:
 
     @property
     def is_ref_designator(self) -> bool:
-        """Regex: ^[A-Z][0-9]+$ per identificare Ref Designator."""
-        return bool(re.match(r"^[A-Z][0-9]+$", self.text.strip()))
+        """D1: 1-lettera con fino a 4 cifre (R1, C105) o 2-lettere con 1-2 cifre (QB1, RB14, U1A)."""
+        return bool(re.match(r"^(?:[A-Z][0-9]{1,4}|[A-Z]{2}[0-9]{1,2})[A-Z]?$", self.text.strip()))
 
     @property
     def is_value(self) -> bool:
-        """Euristiche per valore componente (es. 1k, 10uF, 2N2222)."""
-        val = self.text.strip()
-        return bool(re.match(r"^[0-9]+[.0-9]*\s*[a-zA-ZΩµμ]+[FfHhΩ]?$", val))
+        """B4: valore componente EDA (49R9, 4k7, 10uF, 2N2222, BC547, +5V, 3V3).
+        I ref designator hanno priorità: se is_ref_designator=True, is_value=False.
+        """
+        if self.is_ref_designator:
+            return False
+        return bool(_VALUE_RE.match(self.text.strip()))
 
     @property
     def is_net_label(self) -> bool:
@@ -263,6 +278,11 @@ class VectorExtractor:
         # 1. Disegni vettoriali (linee, archi, rettangoli, cerchi)
         drawings = page.get_drawings()
         for drawing in drawings:
+            # B2: rileva cerchi pieni (junction dot) a livello di drawing dict
+            circle = self._try_extract_circle(drawing)
+            if circle is not None:
+                result.shapes.append(circle)
+                continue  # gli items sono i Bezier del cerchio, non processarli
             items = drawing.get("items", [])
             for item in items:
                 parsed = self._parse_drawing_item(item)
@@ -272,19 +292,8 @@ class VectorExtractor:
                     elif isinstance(parsed, PDFShape):
                         result.shapes.append(parsed)
 
-        # 2. Testo - usa get_text("blocks") per blocchi con bbox
-        text_blocks = page.get_text("blocks")
-        for block in text_blocks:
-            # block: (x0, y0, x1, y1, text, block_no, block_type)
-            x0, y0, x1, y1, text, *_ = block
-            # Unisce span frammentati su stessa linea (stessa y, distanza < 3x font_size)
-            merged_text = self._merge_text_spans(text, x0, y0, x1, y1)
-            result.text_blocks.append(
-                PDFTextBlock(
-                    text=merged_text,
-                    bbox=(x0, y0, x1, y1),
-                )
-            )
+        # 2. Testo: merge reale degli span via get_text("dict") (fix B3)
+        result.text_blocks = self._extract_text_blocks(page)
 
         # 3. Post-processing: merge segmenti collineari (come wire_merge)
         result.segments = self._merge_collinear_segments(result.segments)
@@ -334,28 +343,111 @@ class VectorExtractor:
             )
 
         if kind == "qu":
-            # Quadratic Bezier: approssima con segmento retto
-            p1, p3 = item[1], item[3]
-            return PDFSegment(
-                start=(float(p1[0]), float(p1[1])),
-                end=(float(p3[0]), float(p3[1])),
-                item_type="curve",
+            # Quadrilatero (fitz.Quad): crea PDFShape dai 4 vertici
+            quad = item[1]
+            ul, ur, lr, ll = quad.ul, quad.ur, quad.lr, quad.ll
+            return PDFShape(
+                vertices=[
+                    (float(ul[0]), float(ul[1])),
+                    (float(ur[0]), float(ur[1])),
+                    (float(lr[0]), float(lr[1])),
+                    (float(ll[0]), float(ll[1])),
+                ],
+                item_type="polygon",
             )
 
         # Ignora altri tipi (immagini, clip, etc.)
         return None
 
-    def _merge_text_spans(
-        self, text: str, x0: float, y0: float, x1: float, y1: float
-    ) -> str:
-        """Unisce span frammentati basandosi su geometria.
+    def _try_extract_circle(self, drawing: dict[str, Any]) -> PDFShape | None:
+        """B2: individua cerchi pieni (junction dot candidate) dal drawing dict.
 
-        PyMuPDF a volte spezza un'etichetta in più span. Se sono nella stessa
-        riga e vicini, li uniamo.
+        Criteri: tutti gli items sono Bezier ('c'), bbox circa quadrata, fill presente.
         """
-        # Per ora, semplice: ritorna il testo stripped
-        # In futuro: analizzare span individuali con get_text("dict")
-        return text.strip().replace("\n", " ")
+        fill: Any = drawing.get("fill")
+        rect: Any = drawing.get("rect")
+        items: list[Any] = drawing.get("items", [])
+
+        if fill is None or rect is None or not items:
+            return None
+        # fill può essere un float grayscale o una sequenza RGB
+        if isinstance(fill, (int, float)):
+            g = int(float(fill) * 255)
+            fill_color: tuple[int, int, int] = (g, g, g)
+        elif isinstance(fill, (list, tuple)) and len(fill) >= 3:
+            fill_color = (
+                int(float(fill[0]) * 255),
+                int(float(fill[1]) * 255),
+                int(float(fill[2]) * 255),
+            )
+        else:
+            return None
+        # Un cerchio è approssimato solo da Bezier cubici
+        if not all(item[0] == "c" for item in items):
+            return None
+        w = float(rect.width)
+        h = float(rect.height)
+        if w <= 0 or h <= 0:
+            return None
+        # Tolleranza 20% per distinguere cerchi da ellissi distorte
+        if abs(w - h) > max(w, h) * 0.2:
+            return None
+        return PDFShape(
+            vertices=[(float(rect.x0), float(rect.y0)), (float(rect.x1), float(rect.y1))],
+            item_type="circle",
+            fill_color=fill_color,
+        )
+
+    def _extract_text_blocks(self, page: Any) -> list[PDFTextBlock]:
+        """B3: estrae testo con merge reale degli span tramite get_text("dict").
+
+        Per ogni riga, raggruppa gli span con gap orizzontale < 60% del font-size:
+        "R"+"1" → "R1", "10"+"k" → "10k". Emette un PDFTextBlock per gruppo.
+        """
+        page_dict = page.get_text("dict")
+        result: list[PDFTextBlock] = []
+
+        for block in page_dict.get("blocks", []):
+            if block.get("type") != 0:  # 0 = testo, 1 = immagine
+                continue
+            for line in block.get("lines", []):
+                raw_spans: list[Any] = line.get("spans", [])
+                if not raw_spans:
+                    continue
+                spans: list[Any] = sorted(raw_spans, key=lambda s: s["bbox"][0])
+
+                # Soglia gap: 60% del font-size medio della riga
+                sizes = [float(s["size"]) for s in spans if s.get("size", 0) > 0]
+                avg_size = sum(sizes) / len(sizes) if sizes else 10.0
+                gap_threshold = avg_size * 0.6
+
+                # Raggruppa span contigui (gap < soglia = stesso token)
+                groups: list[list[Any]] = [[spans[0]]]
+                for sp in spans[1:]:
+                    prev_x1 = float(groups[-1][-1]["bbox"][2])
+                    if float(sp["bbox"][0]) - prev_x1 < gap_threshold:
+                        groups[-1].append(sp)
+                    else:
+                        groups.append([sp])
+
+                for group in groups:
+                    text = "".join(s.get("text", "") for s in group).strip()
+                    if not text:
+                        continue
+                    x0 = float(group[0]["bbox"][0])
+                    y0 = float(min(s["bbox"][1] for s in group))
+                    x1 = float(group[-1]["bbox"][2])
+                    y1 = float(max(s["bbox"][3] for s in group))
+                    first = group[0]
+                    result.append(PDFTextBlock(
+                        text=text,
+                        bbox=(x0, y0, x1, y1),
+                        font_size=float(first.get("size", 0.0)),
+                        font_name=str(first.get("font", "")),
+                        is_bold=bool(first.get("flags", 0) & 16),
+                    ))
+
+        return result
 
     def _merge_collinear_segments(
         self, segments: list[PDFSegment], tolerance: float = 0.5

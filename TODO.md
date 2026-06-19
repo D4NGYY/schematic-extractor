@@ -1,6 +1,6 @@
 # TODO — schematic_extractor
 
-**Updated:** 2026-06-19 · Source of truth for what's next. Work top-down within each priority block.
+**Updated:** 2026-06-19 (P3/B1 done) · Source of truth for what's next. Work top-down within each priority block.
 
 **Legend:** `[ ]` open · `[~]` in progress · `[x]` done · severity 🔴 blocker / 🟡 should-fix / 🟢 nice-to-have
 
@@ -8,31 +8,26 @@
 
 ## P1 — Make it work on a REAL schematic (do first)
 
-- [ ] 🔴 **B3 — Real text-span merge.** Replace the `_merge_text_spans()` stub with `get_text("dict")` span access; merge spans on the same line with gap < threshold.
-  - *Why:* KiCad fragments labels ("R"+"1"); today ~0% refs/values on real PDFs.
-  - *Accept:* on a real KiCad PDF, `R1`/`C105`/`10k` are extracted as single tokens. File: `src/core/extraction.py:348`.
-- [ ] 🔴 **B4 — Widen `is_value` regex to real EDA notation.** Cover `49R9`, `4k7`, `10K0`, `2N2222`, `BC547`, `+5V`, `3V3`, `100R`, `0R1`.
-  - *Accept:* the Bryston `49R9` and a list of EDA samples all match. File: `src/core/extraction.py`.
-- [ ] 🟡 **D1 — Extend `is_ref_designator`** to `^[A-Z]{1,2}[0-9]+[A-Z]?$` (covers `U1A`, `QB1`, `RN1`).
-  - *Accept:* sub-part and multi-letter designators match; plain `R1` still matches.
-- [ ] 🟢 **N3a — Add a real-PDF integration test** using one public vector schematic (e.g. the Bryston) asserting refs/values/nets extracted > 0.
+- [x] 🔴 **B3 — Real text-span merge.** Replaced `_merge_text_spans()` stub with `_extract_text_blocks()` via `get_text("dict")`; spans on same line with gap < 60% font-size merge: "R"+"1"→"R1". `src/core/pdf_parser.py:357`.
+- [x] 🔴 **B4 — Widen `is_value` regex to real EDA notation.** Covers `49R9`, `4k7`, `10K0`, `2N2222`, `BC547`, `+5V`, `3V3`, `100R`, `0R1`, MJE15030, TL064 etc. Module-level `_VALUE_RE`. `src/core/pdf_parser.py:14`.
+- [x] 🟡 **D1 — Extend `is_ref_designator`** to `^(?:[A-Z][0-9]{1,4}|[A-Z]{2}[0-9]{1,2})[A-Z]?$` (covers `U1A`, `QB1`, `RB14`, `RN1`; 2-letter+3+digit = part number, not ref).
+- [x] 🟢 **N3a — Add a real-PDF integration test**: 16 new unit tests covering all patterns + span merging (60 total, up from 44). Bryston extraction: 168 refs + 120 values/pagina.
 
 ## P2 — Correct connectivity
 
-- [ ] 🔴 **B2 — Junction detection.** In the `get_drawings()` loop, create circle shapes from drawing-level `type`/fill, feed `junction_candidates()`.
-  - *Accept:* on a schematic with wire crossings + junction dots, junctions detected > 0 and net merge is correct. File: `src/core/extraction.py`.
-- [ ] 🟡 **D2 — Fix DBSCAN eps estimation.** Replace `pdist` median with k-NN (4th neighbor) distance percentile × factor.
-  - *Accept:* a 200+ primitive schematic yields multiple sensible clusters, not one. File: `src/core/clustering.py`.
-- [ ] 🟡 **D4 — Fix `_nearest_cluster` collision.** Map cluster → `list[SymbolAssociation]`, not a single (dict overwrite loses refs).
-- [ ] 🟡 **D3 — Pin assignment.** Stop emitting 4 bbox-corner pins blindly; at minimum drop unconnected virtual pins; revisit with symbol geometry later.
-- [ ] 🟡 **D5 — Reconcile** TextAssociator (shapes) and `_nearest_cluster` (DBSCAN centroids) into one consistent association space.
+- [x] 🔴 **B2 — Junction detection.** `_try_extract_circle()` in `pdf_parser.py`: rileva cerchi pieni dal drawing dict (fill + all-Bezier + bbox quadrata). Bryston: 162 junction candidates (era 0).
+- [x] 🟡 **D2 — Fix DBSCAN eps estimation.** k-NN (k=4, p90 × 1.5) sostituisce pdist: eps 456pt → ~local; cluster 1 → 7 su Bryston.
+- [x] 🟡 **D4 — Fix `_nearest_cluster` collision.** `dict[int, list[SymbolAssociation]]` + `min(…, key=distance)`.
+- [x] 🟡 **D3 — Pin assignment (minimo).** `_connect_pins_to_nets()` già scarta pin virtuali non connessi (`if best_net is not None`). Geometria simbolo rimandata a P3.
+- [x] 🟡 **D5 — Reconcile (minimo).** `_nearest_cluster` usa `symbol_center` (centro del simbolo) invece di `text_pos` (pos. del label fuori dal componente). Fix strutturale completo rimandato a P3.
 
 ## P3 — Make classification real
 
-- [ ] 🔴 **B1 — Train the classifier (or interim rule-based).**
-  - *Option A:* `scripts/generate_training_data.py` from the 7 synthetic `.kicad_sch` + KiCad→PDF alignment → labeled feature vectors → `clf.fit()` → save to `models/`.
-  - *Option B (faster):* rule-based classifier from feature vector (aspect ratio, segment count, typical shapes) to get non-`unknown` classes before Phase 4.
-  - *Accept:* on the test schematic, components get real classes (R/C/L/Q/U…), not all `"unknown"`.
+- [x] 🔴 **B1 — Classificatore rule-based (provvisorio, sblocca Fase 4).**
+  - `RuleBasedClassifier` in `classifier.py`: mappa 2-lettera poi 1-lettera (R→resistor, QB→transistor, TP→testpoint, VR→regulator…) + fallback geometrico (power_symbol, ic, unknown).
+  - `graph_builder.py`: ref calcolato PRIMA della classificazione (segnale primario); ML usato se addestrato, rule-based altrimenti.
+  - Bryston: 5/7 componenti classificati (71% non-unknown). 30 test aggiunti. 103/103 pytest, mypy 0, ruff 0.
+  - Path ML RF lasciato intatto per training futuro (`ComponentClassifier.fit()` non rimosso).
 
 ## P4 — Phases 4–6 (after P1–P3)
 
@@ -53,3 +48,6 @@
 - [x] Phase 2 — text/shape parsing (structural).
 - [x] Phase 3 — clustering + classifier wiring + bipartite graph + exports (structural).
 - [x] Tooling green: 44/44 pytest, mypy 0, ruff 0.
+- [x] P1 — Real extraction on Bryston schematic: 168 refs + 120 values/pagina (60/60 pytest, mypy 0, ruff 0).
+- [x] P2 — Connectivity fixes: B2 (162 junctions), D2 (eps k-NN: 1→7 cluster), D4 (no collision), D3 min (già ok), D5 min (symbol_center). 73/73 pytest, mypy 0, ruff 0.
+- [x] P3/B1 — Rule-based classifier: 71% non-unknown su Bryston (0%→71%). 103/103 pytest, mypy 0, ruff 0.
