@@ -76,9 +76,14 @@ class BipartiteGraphBuilder:
         """Costruisce il grafo bipartito da una pagina estratta."""
         from src.ml.clustering import SpatialClusterer
 
-        # 1. Clustering spaziale
+        # Wire/symbol separation: i fili (axis-aligned + lunghi) vanno in wire_segs;
+        # i primitivi brevi/diagonali (corpi simbolo) vanno in symbol_segs.
+        # DBSCAN vede solo symbol_segs → cluster piccoli e coerenti, nessun cluster gigante.
+        symbol_segs, wire_segs = SpatialClusterer.separate_wires(page.segments)
+
+        # 1. Clustering spaziale: SOLO symbol-primitive
         clusterer = SpatialClusterer()
-        clusters = clusterer.cluster(page.segments, page.shapes)
+        clusters = clusterer.cluster(symbol_segs, page.shapes)
 
         # 2. Associazione testo
         refs, values, _ = self.text_associator.associate(page)
@@ -96,13 +101,10 @@ class BipartiteGraphBuilder:
             self.components[comp.node_id] = comp
             self.graph.add_node(comp.node_id, bipartite=0, **comp.__dict__)
 
-        # D6: calcola wire_segs una volta sola (evita doppio set `used`)
-        # e stima scala caratteristica per tolleranze proporzionali alle coordinate PDF.
-        used = {id(s) for cluster in clusters for s in cluster.segments}
-        wire_segs = [s for s in page.segments if id(s) not in used]
-        scale = self._estimate_scale(wire_segs) if wire_segs else self._estimate_scale(page.segments)
+        # D6: scala da wire_segs reali (o symbol_segs come fallback)
+        scale = self._estimate_scale(wire_segs) if wire_segs else self._estimate_scale(symbol_segs)
 
-        # 4. Trova nets: BFS sui segmenti non assegnati ai cluster
+        # 4. Trova nets: BFS sui wire-candidate pre-separati
         self._build_nets(wire_segs, scale)
 
         # 5. Pin-point matching: connetti pin ai nets
@@ -176,8 +178,9 @@ class BipartiteGraphBuilder:
         if not wire_segs:
             return
 
-        # D6: tolleranza proporzionale alla scala — scala con le coordinate PDF reali.
-        wire_tol = max(1.0, scale * 0.15)
+        # D6: tolleranza proporzionale alla scala.
+        # 0.5× scale gestisce grid step ≈ p10/2 tipici dei PDF EDA (≈2–3pt su Bryston).
+        wire_tol = max(1.0, scale * 0.5)
 
         visited: set[int] = set()
         net_counter = 0

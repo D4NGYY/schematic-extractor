@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -110,6 +111,56 @@ class SpatialClusterer:
             eps=eps,
         )
         return list(clusters.values())
+
+    @staticmethod
+    def _is_axis_aligned(seg: PDFSegment, tol_deg: float = 5.0) -> bool:
+        """Vero se il segmento è orizzontale o verticale entro tol_deg gradi.
+
+        Nei PDF schematics EDA, i fili sono sempre asse-allineati; le linee
+        diagonali o curve appartengono ai corpi dei simboli componente.
+        """
+        dx = abs(seg.end[0] - seg.start[0])
+        dy = abs(seg.end[1] - seg.start[1])
+        if dx + dy < 0.1:
+            return False
+        angle = math.degrees(math.atan2(dy, dx))  # [0°, 90°]
+        return angle <= tol_deg or angle >= (90.0 - tol_deg)
+
+    @staticmethod
+    def separate_wires(
+        segments: list[PDFSegment],
+        factor: float = 3.0,
+    ) -> tuple[list[PDFSegment], list[PDFSegment]]:
+        """Separa wire-candidate da symbol-primitive prima del clustering.
+
+        Criteri wire: asse-allineato (≤5°) AND lunghezza ≥ factor × p25(lunghezze).
+        Il fattore 3× separa i fili lunghi dagli stroke corti dei simboli componente
+        senza dipendere da unità assolute: si adatta alla scala di qualunque PDF.
+
+        Restituisce:
+            (symbol_segs, wire_segs)
+
+        Garantisce comportamento corretto anche su test sintetici con segmenti tutti
+        corti (threshold alta → tutti in symbol_segs → DBSCAN non cambia).
+        """
+        if not segments:
+            return [], []
+
+        lengths = [s.length for s in segments if s.length > 0.1]
+        if not lengths:
+            return list(segments), []
+
+        p25 = float(np.percentile(lengths, 25))
+        threshold = max(5.0, p25 * factor)
+
+        wire_segs: list[PDFSegment] = []
+        symbol_segs: list[PDFSegment] = []
+        for seg in segments:
+            if SpatialClusterer._is_axis_aligned(seg) and seg.length >= threshold:
+                wire_segs.append(seg)
+            else:
+                symbol_segs.append(seg)
+        return symbol_segs, wire_segs
 
     @staticmethod
     def _estimate_eps(x: np.ndarray) -> float:

@@ -1,6 +1,6 @@
 # HANDOFF — schematic_extractor (Schematic AI Reasoner)
 
-**Updated:** 2026-06-19 (D6 scale-aware stub) · **Status:** Phases 0–4 + D6 complete; ERC Bryston: 28 err + 4 warn (da 31+1); bottleneck è DBSCAN che assorbe i fili nei cluster, non più stub_length
+**Updated:** 2026-06-19 (wire/symbol separation) · **Status:** Phases 0–4 + D6 + wire/symbol separation; Bryston: edges 1→9, isolated 6→3; bottleneck residuo = frammenti Bezier arco nei symbol_segs che incatenano i cluster
 
 ---
 
@@ -8,7 +8,7 @@
 
 Pipeline that turns **vector** schematic PDFs into a queryable Components↔Nets graph (export to SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. No OCR — purely geometric extraction (the deliberate alternative to OCR, which is unreliable on schematics).
 
-**Honest current state:** the test suite is green (127/127). Bryston page 0: 168 refs, 120 values, 162 junctions; 7 DBSCAN clusters; 71% classified (rule-based); 26 nets reconstructed. D6 done: edges 1→4 (stub scale-aware + T-junction fix), ERC 32→32 total but 3 errors converted to warnings. Real bottleneck: DBSCAN absorbs 520/546 segments into 7 giant clusters (WB1 bbox 794×505pt = almost full page), leaving only 26 tiny wire stubs outside. Until wire/component separation improves, pin matching remains limited. ML classifier path (RF) still untrained; `RuleBasedClassifier` is the active default.
+**Honest current state:** the test suite is green (135/135). Bryston page 0: 168 refs, 120 values; 8 DBSCAN clusters; 33 wire_segs (6.2–388pt) separati da 513 symbol_segs prima del clustering; 71% classified; 33 nets; 9 edges; 3/8 components isolated. ERC: 28 err + 7 warn = 35. Residual bottleneck: 483 Bezier arc fragments (~2.7pt, angoli 26°/63°/69°) generate dense point chains → WB1 cluster gigante persiste (794×505pt). Questi sono segmenti quadratici di approssimazione delle curve PyMuPDF (spirali induttori, archi transistor). Finché non vengono filtrati prima di DBSCAN, il cluster gigante rimane. ML classifier (RF) non addestrato; RuleBasedClassifier attivo.
 
 ## 2. Goal & scope
 
@@ -37,7 +37,7 @@ Ground truth: KiCad .kicad_sch → coords → auto-labeled training set (no manu
 - **Phase 1** ✅ complete (mypy fixes already applied in code).
 - **Phase 2** ✅ structurally complete — BUT functionally broken on real input: `_merge_text_spans()` is a stub (B3), `is_value` regex inadequate (B4), `is_ref_designator` incomplete (D1), junction detection unreachable (B2).
 - **Phase 3** ✅ structurally complete — BUT ML classifier never trained (B1), DBSCAN eps estimation wrong for large schematics (D2), pin assignment from bbox corners topologically wrong (D3).
-- **Phase 4** ✅ ERC — `src/core/erc.py`: 4 regole (ISOLATED_COMPONENT, FLOATING_PIN, DANGLING_NET, UNCONNECTED_NET, UNNAMED_NET). 16 test, 119/119 pytest. Bryston: 31 err + 1 warn (atteso: stub matching debole).
+- **Phase 4** ✅ ERC — `src/core/erc.py`: 4 regole (ISOLATED_COMPONENT, FLOATING_PIN, DANGLING_NET, UNCONNECTED_NET, UNNAMED_NET). 16 test, 135/135 pytest. Bryston: 28 err + 7 warn post wire/symbol-sep.
 - **Phase 5** ⬜ LLM tool calling + 20-question topology benchmark — not started.
 - **Phase 6** ⬜ Streamlit UI (`src/ui/app.py` does not exist) + portfolio — not started.
 
@@ -55,15 +55,16 @@ Ground truth: KiCad .kicad_sch → coords → auto-labeled training set (no manu
 - **D3** Pin assignment = 4 bbox-corner virtual pins → wrong topology for 2-pin / multi-pin parts. Minimum fix (drop unconnected) already in place; full fix needs symbol geometry (P3).
 - ~~**D4** collision: FIXED — dict-of-list + min(distance).~~
 - **D5** TextAssociator/DBSCAN two-step mapping still conceptually split; minimal fix (`symbol_center` in `_nearest_cluster`) applied. Full reconciliation deferred to P3.
-- ~~**D6** `_segments_touch()` fixed 1.0px tolerance: FIXED. `_estimate_scale()` (p10 lunghezze), stub proporzionale a `min(w,h)*0.5`, T-junction `<=0`. Edges 1→4 su Bryston. Bottleneck reale ora: DBSCAN assorbe fili.~~
+- ~~**D6** `_segments_touch()` fixed 1.0px tolerance: FIXED. `_estimate_scale()` (p10 lunghezze), stub proporzionale a `min(w,h)*0.5`, T-junction `<=0`. Edges 1→4 su Bryston.~~
+  - ~~**Wire/symbol separation**: `SpatialClusterer.separate_wires()` (axis-aligned + length ≥ p25×3). DBSCAN su soli symbol_segs. Bryston: edges 4→9, isolated 6→3, ERC 32→35 (3 erori convertiti a partial connection + dangling).~~
 - **D7** `export_json()` uses inline `open()`/`import json` vs `path.write_text()` elsewhere.
 
 ### 🟢 Nice-to-have
 - N1 HANDOFF/README stale (claimed 10 mypy errors — already 0). N2 perf O(n²/n³) on large schematics. N3 test-coverage gaps (no real-PDF test, no topological-correctness test). N4 `node_id` may collide with real `U1`. N5 `stub_length` not configurable.
 
 ## 6. Next steps (ordered)
-1. **Wire/component separation**: DBSCAN assorbe 520/546 seg nei 7 cluster → solo 26 stub da 4.8pt restano come fili. Finché i fili vengono clusterizzati con i componenti, pin matching e D3 rimangono limitati. Approcci possibili: filtrare segmenti per lunghezza/orientamento prima del clustering, o usare eps più stretto con min_samples più alto.
-2. **D3 full** — pin positions reali da geometria simbolo; dipende da wire separation.
+1. **Filtrare frammenti Bezier arco** prima del clustering: 483 segmenti diagonali corti (~2.7pt, angoli ripetuti) sono approssimazioni di curve PyMuPDF; forman catene dense che creano il cluster WB1 gigante. Fix: escluderli da DBSCAN (item_type="curve" o lunghezza < threshold AND non-axis-aligned). Oppure: clusterizzare SOLO sulle shapes (che già rappresentano i corpi chiusi dei componenti) e assegnare i segment-corti al cluster shape più vicino.
+2. **D3 full** — pin positions reali da geometria simbolo; molto più utile dopo il fix del clustering.
 3. **D5 full** — collassare TextAssociator+`_nearest_cluster` in un unico passo.
 4. **Phase 5** — LLM tool calling (`src/core/llm_tools.py`) + 20-question topology benchmark.
 5. **Phase 6** — Streamlit UI (`src/ui/app.py`).

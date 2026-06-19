@@ -467,3 +467,61 @@ class TestTJunctionIntersectionD6:
         a = PDFSegment(start=(0.0, 0.0), end=(10.0, 0.0), item_type="line")
         b = PDFSegment(start=(0.0, 5.0), end=(10.0, 5.0), item_type="line")
         assert not BipartiteGraphBuilder._segments_intersect(a, b)
+
+
+# ── Wire/symbol separation ────────────────────────────────────────────────────
+
+class TestSeparateWires:
+    """Separazione wire-candidate da symbol-primitive prima del clustering."""
+
+    def test_horizontal_is_axis_aligned(self) -> None:
+        seg = PDFSegment(start=(0.0, 0.0), end=(100.0, 0.0), item_type="line")
+        assert SpatialClusterer._is_axis_aligned(seg)
+
+    def test_vertical_is_axis_aligned(self) -> None:
+        seg = PDFSegment(start=(0.0, 0.0), end=(0.0, 100.0), item_type="line")
+        assert SpatialClusterer._is_axis_aligned(seg)
+
+    def test_diagonal_not_axis_aligned(self) -> None:
+        seg = PDFSegment(start=(0.0, 0.0), end=(10.0, 10.0), item_type="line")
+        assert not SpatialClusterer._is_axis_aligned(seg)
+
+    def test_nearly_horizontal_within_tol(self) -> None:
+        """Segmento con inclinazione 3° → axis-aligned (entro 5°)."""
+        import math
+        dx = math.cos(math.radians(3)) * 10
+        dy = math.sin(math.radians(3)) * 10
+        seg = PDFSegment(start=(0.0, 0.0), end=(dx, dy), item_type="line")
+        assert SpatialClusterer._is_axis_aligned(seg)
+
+    def test_empty_returns_empty(self) -> None:
+        sym, wire = SpatialClusterer.separate_wires([])
+        assert sym == [] and wire == []
+
+    def test_uniform_short_all_become_symbol(self) -> None:
+        """Segmenti tutti corti (test sintetici 10pt) → tutti symbol, zero wire.
+        Garantisce che i test sintetici non cambino comportamento.
+        """
+        segs = [
+            PDFSegment(start=(0.0, 0.0), end=(10.0, 0.0), item_type="line"),  # 10pt H
+            PDFSegment(start=(0.0, 0.0), end=(0.0, 10.0), item_type="line"),  # 10pt V
+        ]
+        # p25=10, threshold=max(5,30)=30 → entrambi i 10pt stanno sotto soglia → symbol
+        sym, wire = SpatialClusterer.separate_wires(segs)
+        assert len(wire) == 0
+        assert len(sym) == 2
+
+    def test_long_axis_aligned_becomes_wire(self) -> None:
+        short = PDFSegment(start=(0.0, 0.0), end=(5.0, 0.0), item_type="line")   # 5pt
+        long_ = PDFSegment(start=(0.0, 0.0), end=(100.0, 0.0), item_type="line") # 100pt
+        # p25([5,100]) ≈ 5, threshold=max(5, 5*3)=15 → 100pt >= 15 → wire
+        sym, wire = SpatialClusterer.separate_wires([short, long_])
+        assert long_ in wire
+        assert short in sym
+
+    def test_long_diagonal_stays_symbol(self) -> None:
+        """Filo lungo ma diagonale → symbol (non asse-allineato)."""
+        diag = PDFSegment(start=(0.0, 0.0), end=(100.0, 100.0), item_type="line")  # 45°
+        sym, wire = SpatialClusterer.separate_wires([diag])
+        assert diag in sym
+        assert diag not in wire
