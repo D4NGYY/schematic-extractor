@@ -270,3 +270,78 @@ class TestSpanMergingB3:
         }
         blocks = VectorExtractor()._extract_text_blocks(page)
         assert blocks == []
+
+
+class TestJunctionDetectionB2:
+    """B2: _try_extract_circle rileva cerchi pieni dai drawing dict di PyMuPDF."""
+
+    def _make_rect(self, x0: float, y0: float, x1: float, y1: float) -> Any:
+        rect = MagicMock()
+        rect.x0 = x0
+        rect.y0 = y0
+        rect.x1 = x1
+        rect.y1 = y1
+        rect.width = x1 - x0
+        rect.height = y1 - y0
+        return rect
+
+    def _make_circle_drawing(
+        self, x0: float, y0: float, x1: float, y1: float,
+        fill: Any = (0.0, 0.0, 0.0),
+    ) -> dict[str, Any]:
+        return {
+            "fill": fill,
+            "rect": self._make_rect(x0, y0, x1, y1),
+            "items": [("c", None, None, None, None)] * 4,
+        }
+
+    def test_small_filled_circle_detected(self) -> None:
+        """Cerchio 2×2 pt riempito → PDFShape circle."""
+        drawing = self._make_circle_drawing(0.0, 0.0, 2.0, 2.0)
+        shape = VectorExtractor()._try_extract_circle(drawing)
+        assert shape is not None
+        assert shape.item_type == "circle"
+        assert shape.fill_color is not None
+
+    def test_is_junction_candidate(self) -> None:
+        """Cerchio 2×2 pieno → is_filled_circle True."""
+        drawing = self._make_circle_drawing(0.0, 0.0, 2.0, 2.0)
+        shape = VectorExtractor()._try_extract_circle(drawing)
+        assert shape is not None
+        assert shape.is_filled_circle
+
+    def test_large_circle_not_junction(self) -> None:
+        """Cerchio grande (10×10) → shape creato ma is_filled_circle False."""
+        drawing = self._make_circle_drawing(0.0, 0.0, 10.0, 10.0)
+        shape = VectorExtractor()._try_extract_circle(drawing)
+        assert shape is not None
+        assert not shape.is_filled_circle
+
+    def test_non_square_bbox_ignored(self) -> None:
+        """Bbox non quadrata (ellisse distorta) → None."""
+        drawing = self._make_circle_drawing(0.0, 0.0, 10.0, 2.0)
+        shape = VectorExtractor()._try_extract_circle(drawing)
+        assert shape is None
+
+    def test_unfilled_drawing_ignored(self) -> None:
+        """Drawing senza fill → None."""
+        drawing = self._make_circle_drawing(0.0, 0.0, 2.0, 2.0, fill=None)
+        shape = VectorExtractor()._try_extract_circle(drawing)
+        assert shape is None
+
+    def test_non_bezier_items_ignored(self) -> None:
+        """Drawing con linee (non Bezier) → None."""
+        drawing = {
+            "fill": (0.0, 0.0, 0.0),
+            "rect": self._make_rect(0.0, 0.0, 2.0, 2.0),
+            "items": [("l", None, None), ("l", None, None)],
+        }
+        shape = VectorExtractor()._try_extract_circle(drawing)
+        assert shape is None
+
+    def test_grayscale_fill_accepted(self) -> None:
+        """Fill scalare (grayscale) → PDFShape valido."""
+        drawing = self._make_circle_drawing(0.0, 0.0, 2.0, 2.0, fill=0.0)
+        shape = VectorExtractor()._try_extract_circle(drawing)
+        assert shape is not None
+        assert shape.fill_color == (0, 0, 0)

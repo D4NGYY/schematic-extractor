@@ -278,6 +278,11 @@ class VectorExtractor:
         # 1. Disegni vettoriali (linee, archi, rettangoli, cerchi)
         drawings = page.get_drawings()
         for drawing in drawings:
+            # B2: rileva cerchi pieni (junction dot) a livello di drawing dict
+            circle = self._try_extract_circle(drawing)
+            if circle is not None:
+                result.shapes.append(circle)
+                continue  # gli items sono i Bezier del cerchio, non processarli
             items = drawing.get("items", [])
             for item in items:
                 parsed = self._parse_drawing_item(item)
@@ -353,6 +358,45 @@ class VectorExtractor:
 
         # Ignora altri tipi (immagini, clip, etc.)
         return None
+
+    def _try_extract_circle(self, drawing: dict[str, Any]) -> PDFShape | None:
+        """B2: individua cerchi pieni (junction dot candidate) dal drawing dict.
+
+        Criteri: tutti gli items sono Bezier ('c'), bbox circa quadrata, fill presente.
+        """
+        fill: Any = drawing.get("fill")
+        rect: Any = drawing.get("rect")
+        items: list[Any] = drawing.get("items", [])
+
+        if fill is None or rect is None or not items:
+            return None
+        # fill può essere un float grayscale o una sequenza RGB
+        if isinstance(fill, (int, float)):
+            g = int(float(fill) * 255)
+            fill_color: tuple[int, int, int] = (g, g, g)
+        elif isinstance(fill, (list, tuple)) and len(fill) >= 3:
+            fill_color = (
+                int(float(fill[0]) * 255),
+                int(float(fill[1]) * 255),
+                int(float(fill[2]) * 255),
+            )
+        else:
+            return None
+        # Un cerchio è approssimato solo da Bezier cubici
+        if not all(item[0] == "c" for item in items):
+            return None
+        w = float(rect.width)
+        h = float(rect.height)
+        if w <= 0 or h <= 0:
+            return None
+        # Tolleranza 20% per distinguere cerchi da ellissi distorte
+        if abs(w - h) > max(w, h) * 0.2:
+            return None
+        return PDFShape(
+            vertices=[(float(rect.x0), float(rect.y0)), (float(rect.x1), float(rect.y1))],
+            item_type="circle",
+            fill_color=fill_color,
+        )
 
     def _extract_text_blocks(self, page: Any) -> list[PDFTextBlock]:
         """B3: estrae testo con merge reale degli span tramite get_text("dict").
