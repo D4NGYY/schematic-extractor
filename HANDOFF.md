@@ -1,6 +1,6 @@
 # HANDOFF — schematic_extractor (Schematic AI Reasoner)
 
-**Updated:** 2026-06-19 (Phase 4 ERC done) · **Status:** Phases 0–4 complete; ERC funzionante, identifica violazioni reali sul Bryston (31 err + 1 warn — stub matching ancora debole, atteso)
+**Updated:** 2026-06-19 (D6 scale-aware stub) · **Status:** Phases 0–4 + D6 complete; ERC Bryston: 28 err + 4 warn (da 31+1); bottleneck è DBSCAN che assorbe i fili nei cluster, non più stub_length
 
 ---
 
@@ -8,7 +8,7 @@
 
 Pipeline that turns **vector** schematic PDFs into a queryable Components↔Nets graph (export to SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. No OCR — purely geometric extraction (the deliberate alternative to OCR, which is unreliable on schematics).
 
-**Honest current state:** the test suite is green (119/119). Bryston page 0: 168 refs, 120 values, 162 junctions; 7 DBSCAN clusters; 71% classified (rule-based); 26 nets reconstructed. ERC (Phase 4): 31 errors + 1 warning — 6/7 components isolated + 25/26 nets unconnected because stub matching (3px fixed tolerance) fails on Bryston PDF coordinate scale. This is a known limitation (D6), not a bug in ERC. ML classifier path (RF) still untrained; `RuleBasedClassifier` is the active default.
+**Honest current state:** the test suite is green (127/127). Bryston page 0: 168 refs, 120 values, 162 junctions; 7 DBSCAN clusters; 71% classified (rule-based); 26 nets reconstructed. D6 done: edges 1→4 (stub scale-aware + T-junction fix), ERC 32→32 total but 3 errors converted to warnings. Real bottleneck: DBSCAN absorbs 520/546 segments into 7 giant clusters (WB1 bbox 794×505pt = almost full page), leaving only 26 tiny wire stubs outside. Until wire/component separation improves, pin matching remains limited. ML classifier path (RF) still untrained; `RuleBasedClassifier` is the active default.
 
 ## 2. Goal & scope
 
@@ -55,15 +55,15 @@ Ground truth: KiCad .kicad_sch → coords → auto-labeled training set (no manu
 - **D3** Pin assignment = 4 bbox-corner virtual pins → wrong topology for 2-pin / multi-pin parts. Minimum fix (drop unconnected) already in place; full fix needs symbol geometry (P3).
 - ~~**D4** collision: FIXED — dict-of-list + min(distance).~~
 - **D5** TextAssociator/DBSCAN two-step mapping still conceptually split; minimal fix (`symbol_center` in `_nearest_cluster`) applied. Full reconciliation deferred to P3.
-- **D6** `_segments_touch()` fixed 1.0px tolerance, not format-aware.
+- ~~**D6** `_segments_touch()` fixed 1.0px tolerance: FIXED. `_estimate_scale()` (p10 lunghezze), stub proporzionale a `min(w,h)*0.5`, T-junction `<=0`. Edges 1→4 su Bryston. Bottleneck reale ora: DBSCAN assorbe fili.~~
 - **D7** `export_json()` uses inline `open()`/`import json` vs `path.write_text()` elsewhere.
 
 ### 🟢 Nice-to-have
 - N1 HANDOFF/README stale (claimed 10 mypy errors — already 0). N2 perf O(n²/n³) on large schematics. N3 test-coverage gaps (no real-PDF test, no topological-correctness test). N4 `node_id` may collide with real `U1`. N5 `stub_length` not configurable.
 
 ## 6. Next steps (ordered)
-1. **D6 — Stub matching format-aware**: il matching a 3px fisso fallisce sulle coordinate reali del Bryston. Necessario per connettere componenti a nets e ridurre i falsi ERC. Senza D6, ERC è sempre rumoroso.
-2. **D3 full** — pin positions reali da geometria simbolo (classe nota ora).
+1. **Wire/component separation**: DBSCAN assorbe 520/546 seg nei 7 cluster → solo 26 stub da 4.8pt restano come fili. Finché i fili vengono clusterizzati con i componenti, pin matching e D3 rimangono limitati. Approcci possibili: filtrare segmenti per lunghezza/orientamento prima del clustering, o usare eps più stretto con min_samples più alto.
+2. **D3 full** — pin positions reali da geometria simbolo; dipende da wire separation.
 3. **D5 full** — collassare TextAssociator+`_nearest_cluster` in un unico passo.
 4. **Phase 5** — LLM tool calling (`src/core/llm_tools.py`) + 20-question topology benchmark.
 5. **Phase 6** — Streamlit UI (`src/ui/app.py`).

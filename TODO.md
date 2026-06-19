@@ -1,6 +1,6 @@
 # TODO — schematic_extractor
 
-**Updated:** 2026-06-19 (Phase 4 ERC done) · Source of truth for what's next. Work top-down within each priority block.
+**Updated:** 2026-06-19 (D6 scale-aware stub) · Source of truth for what's next. Work top-down within each priority block.
 
 **Legend:** `[ ]` open · `[~]` in progress · `[x]` done · severity 🔴 blocker / 🟡 should-fix / 🟢 nice-to-have
 
@@ -37,7 +37,8 @@
 
 ## P5 — Hygiene / cleanup
 
-- [ ] 🟢 **D6** format-aware `_segments_touch()` tolerance. **D7** `export_json()` → `path.write_text()`. **N4** `node_id` collision guard. **N5** configurable `stub_length`.
+- [x] 🟢 **D6** `_estimate_scale()` p10 segment lengths; stub `min(w,h)*0.5`; T-junction `<=0`. Edges 1→4 su Bryston; 127/127 pytest, mypy 0, ruff 0.
+- [ ] 🟢 **D7** `export_json()` → `path.write_text()`. **N4** `node_id` collision guard. **N5** configurable `stub_length`.
 - [ ] 🟢 Perf: spatial index for `_merge_collinear_segments()` and `_build_nets()` BFS on large schematics.
 
 ---

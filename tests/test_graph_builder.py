@@ -405,3 +405,65 @@ class TestRuleBasedClassifierB1:
         cluster = _make_small_cluster(0)
         _, confidence = self.clf.classify("R1", cluster)
         assert confidence >= 0.80
+
+
+# ── D6: _estimate_scale ───────────────────────────────────────────────────────
+
+class TestEstimateScaleD6:
+    """D6: stima scala caratteristica dai segmenti."""
+
+    def test_empty_returns_one(self) -> None:
+        assert BipartiteGraphBuilder._estimate_scale([]) == 1.0
+
+    def test_degenerate_zero_length_ignored(self) -> None:
+        """Segmenti di lunghezza nulla non devono influire sulla stima."""
+        segs = [PDFSegment(start=(0.0, 0.0), end=(0.0, 0.0), item_type="line")]
+        assert BipartiteGraphBuilder._estimate_scale(segs) == 1.0
+
+    def test_single_segment_returns_length(self) -> None:
+        seg = PDFSegment(start=(0.0, 0.0), end=(10.0, 0.0), item_type="line")
+        scale = BipartiteGraphBuilder._estimate_scale([seg])
+        assert scale == pytest.approx(10.0, abs=0.01)
+
+    def test_p10_of_lengths(self) -> None:
+        """Con 10 segmenti, p10 deve essere il primo della lista ordinata."""
+        segs = [
+            PDFSegment(start=(0.0, 0.0), end=(float(i), 0.0), item_type="line")
+            for i in range(1, 11)  # lunghezze 1..10
+        ]
+        scale = BipartiteGraphBuilder._estimate_scale(segs)
+        # p10 = lengths[max(0, int(10*0.10)-1)] = lengths[0] = 1.0
+        assert scale == pytest.approx(1.0, abs=0.01)
+
+    def test_large_scale_schematic(self) -> None:
+        """Segmenti di 50pt → scala ≥ 50."""
+        segs = [
+            PDFSegment(start=(0.0, 0.0), end=(50.0, 0.0), item_type="line"),
+            PDFSegment(start=(0.0, 0.0), end=(100.0, 0.0), item_type="line"),
+        ]
+        scale = BipartiteGraphBuilder._estimate_scale(segs)
+        assert scale >= 50.0
+
+
+# ── D6: T-junction in _segments_intersect ────────────────────────────────────
+
+class TestTJunctionIntersectionD6:
+    """D6: stub che termina esattamente sul corpo del filo deve essere rilevato."""
+
+    def test_t_junction_stub_end_on_wire(self) -> None:
+        """Stub orizzontale il cui end tocca il filo verticale (T-junction)."""
+        stub = PDFSegment(start=(0.0, 0.0), end=(10.0, 0.0), item_type="line")
+        wire = PDFSegment(start=(10.0, -5.0), end=(10.0, 5.0), item_type="line")
+        assert BipartiteGraphBuilder._segments_intersect(stub, wire)
+
+    def test_t_junction_stub_start_on_wire(self) -> None:
+        """Filo che inizia esattamente dove finisce lo stub (T-junction inversa)."""
+        stub = PDFSegment(start=(0.0, 0.0), end=(10.0, 0.0), item_type="line")
+        wire = PDFSegment(start=(0.0, -5.0), end=(0.0, 5.0), item_type="line")
+        assert BipartiteGraphBuilder._segments_intersect(stub, wire)
+
+    def test_non_touching_parallel_still_false(self) -> None:
+        """Segmenti paralleli non sovrapposti non devono intersecarsi."""
+        a = PDFSegment(start=(0.0, 0.0), end=(10.0, 0.0), item_type="line")
+        b = PDFSegment(start=(0.0, 5.0), end=(10.0, 5.0), item_type="line")
+        assert not BipartiteGraphBuilder._segments_intersect(a, b)

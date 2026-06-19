@@ -96,11 +96,17 @@ class BipartiteGraphBuilder:
             self.components[comp.node_id] = comp
             self.graph.add_node(comp.node_id, bipartite=0, **comp.__dict__)
 
+        # D6: calcola wire_segs una volta sola (evita doppio set `used`)
+        # e stima scala caratteristica per tolleranze proporzionali alle coordinate PDF.
+        used = {id(s) for cluster in clusters for s in cluster.segments}
+        wire_segs = [s for s in page.segments if id(s) not in used]
+        scale = self._estimate_scale(wire_segs) if wire_segs else self._estimate_scale(page.segments)
+
         # 4. Trova nets: BFS sui segmenti non assegnati ai cluster
-        self._build_nets(page, clusters)
+        self._build_nets(wire_segs, scale)
 
         # 5. Pin-point matching: connetti pin ai nets
-        self._connect_pins_to_nets(page)
+        self._connect_pins_to_nets(scale)
 
         logger.info(
             "Graph built",
@@ -160,25 +166,23 @@ class BipartiteGraphBuilder:
                 best = cluster.cluster_id
         return best
 
-    def _build_nets(self, page: ExtractedPage, clusters: list[ComponentCluster]) -> None:
-        """Costruisce nets connettendo segmenti non appartenenti a cluster isolati."""
-        # Segmenti non usati dai cluster (o condivisi)
-        used = set()
-        for cluster in clusters:
-            for seg in cluster.segments:
-                used.add(id(seg))
+    def _build_nets(self, wire_segs: list[PDFSegment], scale: float) -> None:
+        """Costruisce nets via BFS sui segmenti non appartenenti a cluster.
 
-        all_segments = [s for s in page.segments if id(s) not in used]
-        if not all_segments:
-            # Se tutti i segmenti sono in cluster, i nets sono i collegamenti tra cluster
-            # Per ora: crea un net per ogni connessione trovata in _connect_pins_to_nets
+        Args:
+            wire_segs: segmenti esclusi dai cluster (pre-calcolati in build_from_page).
+            scale: scala caratteristica del disegno (D6) per wire_tol proporzionale.
+        """
+        if not wire_segs:
             return
 
-        # BFS sui segmenti (simile a kicad_net_reconstructor)
-        visited = set()
+        # D6: tolleranza proporzionale alla scala — scala con le coordinate PDF reali.
+        wire_tol = max(1.0, scale * 0.15)
+
+        visited: set[int] = set()
         net_counter = 0
 
-        for seg in all_segments:
+        for seg in wire_segs:
             if id(seg) in visited:
                 continue
             net_counter += 1
@@ -190,16 +194,26 @@ class BipartiteGraphBuilder:
                     continue
                 visited.add(id(current))
                 net.segments.append(current)
-
-                # Trova segmenti connessi (estremità vicine)
-                for other in all_segments:
-                    if id(other) in visited:
-                        continue
-                    if self._segments_touch(current, other):
+                for other in wire_segs:
+                    if id(other) not in visited and self._segments_touch(current, other, tol=wire_tol):
                         stack.append(other)
 
             self.nets[net.net_id] = net
             self.graph.add_node(net.net_id, bipartite=1, **net.__dict__)
+
+    @staticmethod
+    def _estimate_scale(segments: list[PDFSegment]) -> float:
+        """Stima la scala caratteristica dalla distribuzione delle lunghezze dei segmenti.
+
+        Usa il 10° percentile per catturare la lunghezza tipica dei segmenti corti
+        (stub di connessione pin-filo) senza essere distorto dai segmenti lunghi.
+        Si adatta automaticamente alle coordinate PDF reali senza costanti magiche.
+        """
+        lengths = sorted(s.length for s in segments if s.length > 0.1)
+        if not lengths:
+            return 1.0
+        idx = max(0, int(len(lengths) * 0.10) - 1)
+        return max(1.0, lengths[idx])
 
     def _segments_touch(self, a: PDFSegment, b: PDFSegment, tol: float = 1.0) -> bool:
         """Verifica se due segmenti si toccano (estremità vicine)."""
@@ -211,14 +225,21 @@ class BipartiteGraphBuilder:
                     return True
         return False
 
-    def _connect_pins_to_nets(self, page: ExtractedPage) -> None:
-        """Connette i pin dei componenti ai nets via stub matching."""
-        # Per ogni componente, estende stub virtuali dai bordi del bbox
-        # e vede se interseca un net
+    def _connect_pins_to_nets(self, scale: float) -> None:
+        """Connette i pin dei componenti ai nets via stub matching scale-aware.
+
+        Args:
+            scale: scala caratteristica del disegno (D6) usata come floor per lo stub.
+        """
         for comp in self.components.values():
             if comp.bbox is None:
                 continue
             x0, y0, x1, y1 = comp.bbox
+            w, h = x1 - x0, y1 - y0
+            # D6: stub proporzionale alla dimensione del componente e alla scala del disegno.
+            # min(w,h)*0.5 raggiunge il bordo del cluster dal centro; scale è il floor.
+            stub = max(self.stub_length, min(w, h) * 0.5, scale)
+
             # 4 punti cardinali (centri dei lati)
             pin_candidates = [
                 ("1", (x0, (y0 + y1) / 2)),  # sinistra
@@ -227,8 +248,7 @@ class BipartiteGraphBuilder:
                 ("4", ((x0 + x1) / 2, y1)),  # sotto
             ]
             for pin_name, pin_pos in pin_candidates:
-                # Cerca il net più vicino con estensione stub
-                best_net = self._find_net_with_stub(pin_pos, self.stub_length)
+                best_net = self._find_net_with_stub(pin_pos, stub)
                 if best_net is not None:
                     pin = PinNode(
                         pin_id=f"{comp.node_id}_{pin_name}",
@@ -284,7 +304,8 @@ class BipartiteGraphBuilder:
         c3 = float(cross(b.start[0], b.start[1], b.end[0], b.end[1], a.start[0], a.start[1]))
         c4 = float(cross(b.start[0], b.start[1], b.end[0], b.end[1], a.end[0], a.end[1]))
 
-        return bool((c1 * c2 < 0) and (c3 * c4 < 0))
+        # D6: <= 0 invece di < 0 per rilevare T-junction (un cross-product = 0 = endpoint su segmento).
+        return bool((c1 * c2 <= 0) and (c3 * c4 <= 0))
 
     # ===================== EXPORT =====================
 
