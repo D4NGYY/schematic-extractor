@@ -3,8 +3,10 @@ from __future__ import annotations
 import pickle
 import re
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import structlog
 from sklearn.ensemble import RandomForestClassifier
 
@@ -136,7 +138,7 @@ class ComponentClassifier:
         if model_path is not None:
             self.load(model_path)
 
-    def fit(self, features: np.ndarray, y: np.ndarray) -> None:
+    def fit(self, features: npt.NDArray[np.float64], y: npt.NDArray[Any]) -> None:
         """Addestra il Random Forest."""
         self.model = RandomForestClassifier(
             n_estimators=100,
@@ -189,6 +191,6 @@ class ComponentClassifier:
 
     def extract_features_batch(
         self, clusters: list[ComponentCluster]
-    ) -> np.ndarray:
+    ) -> npt.NDArray[np.float64]:
         """Estrae feature vector per una lista di cluster."""
         return np.array([self.fe.extract(c).to_array() for c in clusters])

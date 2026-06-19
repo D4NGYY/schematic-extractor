@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+import numpy.typing as npt
 from scipy.spatial import ConvexHull
 
 from src.ml.clustering import ComponentCluster
@@ -26,7 +27,7 @@ class FeatureVector:
     std_y: float                 # 12 deviazione std y segmenti
     max_segment_length: float   # 13 lunghezza max segmento
 
-    def to_array(self) -> np.ndarray:
+    def to_array(self) -> npt.NDArray[np.float64]:
         return np.array([
             self.aspect_ratio,
             self.num_segments,

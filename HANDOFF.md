@@ -1,93 +1,186 @@
 # HANDOFF — schematic_extractor (Schematic AI Reasoner)
 
-**Updated:** 2026-06-19 (endpoint single-linkage clustering) · **Status:** Phases 0–4 + D6 + wire/symbol separation + single-linkage clustering; Bryston: edges 9→35, blob WB1 eliminato; bottleneck ora = pin→net (D3) + over-segmentation (63 cluster, 34 isolati)
+_Complete handoff to resume this project from any point. Last updated: 2026-06-19._
 
 ---
 
-## 1. TL;DR (read this first)
+## 0. TL;DR (resume in 30 seconds)
+Turns **vector** schematic PDFs into a queryable **Components↔Nets** graph (export SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. **No OCR — purely geometric extraction** (deliberate alternative to OCR, which is unreliable on schematics). Code is on branch `feat/wire-symbol-separation`, **committed locally** (latest: `240358e` Streamlit UI, `f22b2c9` single-linkage clustering). Test suite **green (144/144)**. The page-spanning clustering **blob is fixed** (single-linkage on endpoints); a **visual debug UI** now exists to tune it. **Next real bottleneck = pin→net matching (D3)** + clustering over-segmentation, now *visible* instead of masked. End goal: **public portfolio release** (see §10).
 
-Pipeline that turns **vector** schematic PDFs into a queryable Components↔Nets graph (export to SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. No OCR — purely geometric extraction (the deliberate alternative to OCR, which is unreliable on schematics).
+---
 
-**Honest current state:** test suite verde (142/142, +7 sul nuovo clustering). Il clustering ora usa **single-linkage sugli endpoint** (non piu midpoint-DBSCAN): il blob WB1 a livello di pagina (177 seg, 794×505pt) e sparito — cluster a scala-componente (top 15/15/12/10/9/8), link_dist adattivo data-derived (~8.6pt su Bryston). Edges 9→35. Il blob mascherava il problema vero: ora emerge l'**over-segmentation** (63 cluster, 34 componenti isolati), dovuta a pin→net debole (D3) e a cluster-rumore a 2 segmenti. ML classifier (RF) non addestrato; RuleBasedClassifier attivo. I 280 frammenti Bezier (item_type='curve') sono gia filtrati da separate_wires.
+## 1. Objectives & why
 
-## 2. Goal & scope
+### 1a. Objective
+A pipeline that reconstructs the **electrical topology** of a legacy/vector schematic PDF — components, nets, connectivity — as a bipartite graph, exportable to SPICE/KiCad/JSON and queryable in natural language via an LLM tool-calling layer. Ship with a **reproducible demo** and a polished portfolio artifact.
 
-**Does:** geometric extraction from vector PDFs → DBSCAN clustering → component classification → bipartite Component/Net graph → export SPICE/KiCad/JSON → LLM topology queries (`get_neighbors`, `get_path`, `get_net_components`).
+### 1b. Why
+- **Portfolio piece at the intersection of AI integration and electronics domain knowledge** — a differentiated, fully-owned project.
+- Legacy schematics (service manuals, CAD exports) are locked as pixels/vectors with no machine-readable topology. Bridging them to modern simulation/versioning is a real, underserved problem.
+- Strategic value accrues from the build itself (skills + public artifact), independent of adoption.
 
-**Does NOT:** read scanned/raster PDFs (that is the separate `librechat-ingestion-fix` OCR project — complementary, different input). Does not replace a real simulator; produces a structural model, not validated electrical behavior.
+### 1c. Design choice: geometric, not OCR
+Extraction is **purely geometric** (segments, shapes, text spans from the vector layer) — *not* OCR. OCR is unreliable on dense schematics with tiny labels and crossing wires. This is the deliberate complement to the separate `librechat-ingestion-fix` OCR project (different input: scanned/raster PDFs). This project does **not** read raster PDFs and does **not** replace a simulator — it produces a *structural* model, not validated electrical behavior.
 
-## 3. Architecture (data flow)
+### 1d. Track context
+Open-source / career-capital track. Ground truth is **auto-derived from KiCad files** (no manual labeling). Kept as a standalone portfolio project. Skills transfer; the public release is the milestone (§10).
 
+---
+
+## 2. Current status (snapshot)
+- **Branch:** `feat/wire-symbol-separation` — **committed locally** (push status: local).
+- **Commits on branch (newest first):**
+  - `240358e` feat: Add Streamlit UI and headless render for graph visualization
+  - `f22b2c9` feat(clustering): single-linkage su endpoint, elimina blob WB1
+  - `4a26d13` feat(clustering): wire/symbol separation before DBSCAN
+  - `afb63f0` fix(d6): scale-aware stub matching and T-junction detection in graph_builder
+  - `01817f5` feat(erc): Phase 4 ERC — electrical rule checks on bipartite graph
+- **Tests:** **144 passed** (pytest). ruff 0. mypy: **0 on all touched files**; 3 pre-existing `np.ndarray` type-arg errors remain in `classifier.py`/`feature_extractor.py` (already in history, not introduced here — sandbox mypy stricter than the pinned env; §7).
+- **Bryston page 0 (real input), adaptive link_dist (~8.6pt):** 63 components · 18 nets · **35 edges** · 34 isolated. No page-spanning blob.
+- **Same, link_dist=12pt:** 51 components · 18 nets · 37 edges · 22 isolated (fewer fragments).
+
+---
+
+## 3. The problem & root cause (current focus)
+- **Just fixed — clustering blob (WB1):** the old clustering (DBSCAN on segment **midpoints**, single global `eps≈47pt`) chained densely-packed symbol strokes into **one fake page-sized "component"** (177 segments, 794×505pt). Downstream this collapsed connectivity to 9 edges / 3-of-8 isolated. **Root cause:** midpoint density + one global radius cannot separate components that sit close together. **Fix:** single-linkage on **shared endpoints** (how a symbol is actually drawn — touching strokes; wires that would bridge symbols are already removed), with a **data-derived** linkage distance. Blob eliminated; edges 9→35.
+- **Newly visible — pin→net (D3) + over-segmentation:** the blob was masking these. Pins are still virtual bbox-corner points (topologically wrong for most parts), so many real components don't attach to a net (34 isolated). Some clusters are 2-segment noise. This is the next bottleneck.
+- **Already filtered:** 280 Bezier-arc fragments (`item_type="curve"`, ~2.0pt) are removed by `separate_wires()` before clustering — they are **not** the residual blob cause (a common misdiagnosis; verified).
+
+---
+
+## 4. Architecture map (data flow)
 ```
 vector PDF
-  → PyMuPDF extraction (segments, shapes, text)        src/core/extraction.py
-  → DBSCAN clustering of primitives → symbol clusters  src/core/clustering.py
-  → feature extraction (13 features) + RF classifier   src/core/feature_extractor.py, classifier.py
-  → text association (refs / values → symbols)          src/core/text_associator.py
-  → net reconstruction (segment BFS, junctions)         src/core/*nets*
-  → bipartite graph Components↔Nets                     src/core/graph_builder.py
-  → export SPICE / KiCad / JSON                         src/core/export*.py
-  → LLM tool calling over the graph                     (Phase 5, not built)
+  → PyMuPDF extraction (segments, shapes, text spans)     src/core/pdf_parser.py
+  → wire/symbol separation (+ Bezier-curve filter)        src/ml/clustering.py: separate_wires()
+  → single-linkage clustering on endpoints → symbols      src/ml/clustering.py: cluster()
+  → feature extraction (13 features) + classifier         src/ml/feature_extractor.py, classifier.py
+  → text association (refs / values → symbols)            src/core/text_associator.py
+  → net reconstruction (segment BFS, junctions)           src/core/graph_builder.py
+  → bipartite graph Components↔Nets                        src/core/graph_builder.py
+  → export SPICE / KiCad / JSON                            src/core/graph_builder.py
+  → visual debug overlay (render + Streamlit)              src/ui/render.py, src/ui/app.py
+  → LLM tool calling over the graph                        (Phase 5, not built)
 Ground truth: KiCad .kicad_sch → coords → auto-labeled training set (no manual labeling)
 ```
 
-## 4. Status by phase
+---
 
-- **Phase 0** ✅ complete and working.
-- **Phase 1** ✅ complete (mypy fixes already applied in code).
-- **Phase 2** ✅ structurally complete — BUT functionally broken on real input: `_merge_text_spans()` is a stub (B3), `is_value` regex inadequate (B4), `is_ref_designator` incomplete (D1), junction detection unreachable (B2).
-- **Phase 3** ✅ structurally complete — BUT ML classifier never trained (B1), DBSCAN eps estimation wrong for large schematics (D2), pin assignment from bbox corners topologically wrong (D3).
-- **Phase 4** ✅ ERC — `src/core/erc.py`: 4 regole (ISOLATED_COMPONENT, FLOATING_PIN, DANGLING_NET, UNCONNECTED_NET, UNNAMED_NET). 16 test, 135/135 pytest. Bryston: 28 err + 7 warn post wire/symbol-sep.
-- **Phase 5** ⬜ LLM tool calling + 20-question topology benchmark — not started.
-- **Phase 6** ⬜ Streamlit UI (`src/ui/app.py` does not exist) + portfolio — not started.
+## 5. What was built (file by file)
+**Core (`src/core/`):**
+- `pdf_parser.py` — PyMuPDF vector extraction: `PDFSegment`/`PDFShape`/`PDFTextBlock`, text-span merge (`_extract_text_blocks`, B3 done), EDA value/ref regex (B4/D1), junction circles (B2).
+- `graph_builder.py` — bipartite graph: clustering → classify → text-associate → nets (BFS) → pin→net matching → exports (SPICE/KiCad/JSON). **New:** `cluster_eps` param to tune link_dist from the UI.
+- `text_associator.py`, `erc.py` (Phase 4 ERC: ISOLATED_COMPONENT, FLOATING_PIN, DANGLING/UNCONNECTED/UNNAMED_NET), `coordinate_system.py`, `logging_config.py`.
 
-## 5. Known issues / risks
+**ML (`src/ml/`):**
+- `clustering.py` — **rewritten clustering**: `cluster()` now single-linkage union-find on segment endpoints + O(n) spatial grid; `_link_segments()`, `_estimate_link_dist()` (p60 of nearest-other-endpoint distance, data-derived). `separate_wires()` (wire vs symbol + Bezier-curve filter). `_estimate_eps()` kept for back-compat.
+- `feature_extractor.py` (13 features), `classifier.py` (`RuleBasedClassifier` active; `ComponentClassifier` RF path kept, untrained).
 
-### 🔴 Blockers (output is unusable on real schematics until fixed)
-- ~~**B1** — Classifier inert: FIXED (provvisorio). `RuleBasedClassifier` in `classifier.py`: prefisso→classe (R→resistor, QB→transistor, TP→testpoint…) + fallback geometrico. Bryston: 71% non-unknown. Path ML RF lasciato intatto per training futuro.~~
-- ~~**B2** — Junction detection: FIXED. `_try_extract_circle()` in `pdf_parser.py`; 162 junctions on Bryston.~~
-- **B3 — `_merge_text_spans()` is a stub.** KiCad fragments labels ("R"+"1" → "R 1"); refs/values don't match. Use `get_text("dict")` spans merged by line + gap. (`extraction.py:348`)
-- **B4 — `is_value` regex too narrow.** Misses `49R9`, `4k7`, `10K0`, `2N2222`, `+5V`, `3V3`, `100R`… Needs EDA R-notation + part-number + voltage patterns. (`extraction.py`)
+**UI (`src/ui/`) — new:**
+- `render.py` — headless render: PyMuPDF page raster + diagnostic overlay (component bbox **green=connected / red=isolated**, refs, net segments in blue). Pure/testable; `build_overlay()`, `save_overlay()`.
+- `app.py` — minimal Streamlit: PDF picker, DPI + `link_dist` sliders (0 = adaptive), live graph metrics + overlay image.
 
-### 🟡 Should-fix
-- **D1** `is_ref_designator` misses `U1A`, `QB1`, multi-letter/suffix designators.
-- ~~**D2** eps pdist: FIXED — k-NN p90×1.5; Bryston 1→7 cluster.~~
-- **D3** Pin assignment = 4 bbox-corner virtual pins → wrong topology for 2-pin / multi-pin parts. Minimum fix (drop unconnected) already in place; full fix needs symbol geometry (P3).
-- ~~**D4** collision: FIXED — dict-of-list + min(distance).~~
-- **D5** TextAssociator/DBSCAN two-step mapping still conceptually split; minimal fix (`symbol_center` in `_nearest_cluster`) applied. Full reconciliation deferred to P3.
-- ~~**D6** `_segments_touch()` fixed 1.0px tolerance: FIXED. `_estimate_scale()` (p10 lunghezze), stub proporzionale a `min(w,h)*0.5`, T-junction `<=0`. Edges 1→4 su Bryston.~~
-  - ~~**Wire/symbol separation**: `SpatialClusterer.separate_wires()` (axis-aligned + length ≥ p25×3). DBSCAN su soli symbol_segs. Bryston: edges 4→9, isolated 6→3, ERC 32→35 (3 erori convertiti a partial connection + dangling).~~
-- **D7** `export_json()` uses inline `open()`/`import json` vs `path.write_text()` elsewhere.
+**Tests (`tests/`):** `test_pdf_parser.py`, `test_graph_builder.py`, `test_kicad_net_reconstructor.py`, `test_erc.py`, **`test_clustering_linkage.py` (new, 7)**, **`test_render_overlay.py` (new, 2 smoke)**.
 
-### 🟢 Nice-to-have
-- N1 HANDOFF/README stale (claimed 10 mypy errors — already 0). N2 perf O(n²/n³) on large schematics. N3 test-coverage gaps (no real-PDF test, no topological-correctness test). N4 `node_id` may collide with real `U1`. N5 `stub_length` not configurable.
+**Data (`data/`, `test_input/`):** `kicad/synthetic/*.kicad_sch`, `ground_truth/` (auto-derived `.cir`/`.net`/`_graph.json`), `test_input/bryston_schematic.pdf` (real input — **license to verify, §13**).
 
-## 6. Next steps (ordered)
-1. **Filtrare frammenti Bezier arco** prima del clustering: 483 segmenti diagonali corti (~2.7pt, angoli ripetuti) sono approssimazioni di curve PyMuPDF; forman catene dense che creano il cluster WB1 gigante. Fix: escluderli da DBSCAN (item_type="curve" o lunghezza < threshold AND non-axis-aligned). Oppure: clusterizzare SOLO sulle shapes (che già rappresentano i corpi chiusi dei componenti) e assegnare i segment-corti al cluster shape più vicino.
-2. **D3 full** — pin positions reali da geometria simbolo; molto più utile dopo il fix del clustering.
-3. **D5 full** — collassare TextAssociator+`_nearest_cluster` in un unico passo.
-4. **Phase 5** — LLM tool calling (`src/core/llm_tools.py`) + 20-question topology benchmark.
-5. **Phase 6** — Streamlit UI (`src/ui/app.py`).
-6. **B1 ML upgrade** — train RF su coppie KiCad→PDF reali; `RuleBasedClassifier` rimane fallback.
+---
 
-## 7. Run / test
-```
-cd C:\Users\danie\Desktop\Projects\schematic_extractor
-pytest -q          # expect 44 passed
-mypy .             # 0 errors
-ruff check .       # 0 errors
-```
-Gaps: KiCad CLI not installed → synthetic `.kicad_sch` have no matching PDF → no real end-to-end test yet.
+## 6. Key decisions (locked) + rationale
+- **Geometric extraction, no OCR.** Deliberate (§1c). Reliable on vector schematics; complements the OCR project.
+- **Single-linkage on endpoints (not midpoint-DBSCAN).** Endpoints reflect how symbols are drawn; avoids the global-eps page-blob. Verified: midpoint-DBSCAN cannot separate close components at any single eps; endpoint linkage can.
+- **Data-derived link_dist (p60 nearest-other-endpoint).** No absolute constants → adapts to any PDF scale (~8.6pt on Bryston). Explicit `eps`/`cluster_eps` overrides it (tests + UI slider).
+- **Bezier-curve fragments filtered before clustering** (`item_type="curve"`). They don't carry connectivity.
+- **Rule-based classifier active, RF path kept untrained.** Unblocks downstream without a trained model; RF needs KiCad→PDF aligned pairs first.
+- **Ground truth auto-derived from KiCad** — no manual labeling.
+- **Visual debug harness before further clustering/pin tuning** — tune by looking, not blind.
+- **TDD / tooling gates:** pytest + ruff + mypy must stay green.
 
-## 8. Key files
-`src/core/extraction.py` (PyMuPDF, text/shape parsing — B2/B3/B4 live here), `clustering.py` (DBSCAN — D2), `feature_extractor.py` + `classifier.py` (RF — B1), `text_associator.py` (D5), `graph_builder.py` (bipartite, pins — D3/D4), `export_*.py` (D7), `tests/` (44 tests).
+---
 
-## 9. Constraints / conventions
-- No OCR — geometric extraction only (design choice).
-- Tests + mypy + ruff must stay green. Black/ruff formatting.
-- Ground truth auto-derived from KiCad files (no manual labeling).
-- Update this HANDOFF and TODO.md after each work session (keep them non-stale).
+## 7. Test status
+- **144 passed** (`python -m pytest -q`). ruff: **All checks passed** on touched files.
+- **mypy:** clean on `clustering.py`, `render.py`, `app.py`, `graph_builder.py`. **3 pre-existing errors** remain: `Missing type arguments for generic type "ndarray"` in `feature_extractor.py:29`, `classifier.py:139,192`. They exist in HEAD, are in files not touched here, and reflect a stricter mypy/numpy-stub version in this environment than the pinned one. **Decide:** fix all 3 with `npt.NDArray[...]` (trivial, identical change) to make the whole repo mypy-0, or leave as env-specific.
+- Run: `pytest -q` · `mypy src` · `ruff check .` from project root.
+- **Gap:** KiCad CLI not installed → synthetic `.kicad_sch` have no matching rendered PDF → no fully automated KiCad→PDF→graph round-trip test yet (§9).
 
-## 10. Open decisions
-- Train the RF properly (needs KiCad→PDF alignment) vs ship an interim rule-based classifier first?
-- Install KiCad CLI to generate real test PDFs, or hand-pick a few public vector schematics as the real-input test set?
+---
+
+## 8. Verified state / demo (2026-06-19)
+- **Clustering fix verified on Bryston:** blob (177 seg / 794×505pt) → component-scale clusters (top sizes 15/15/12/10/9/8), edges **9→35**. New unit tests assert single-linkage groups touching strokes, does not chain gapped groups, assigns/drops shapes correctly.
+- **Visual overlay generated** (`src/ui/render.py`, headless): Bryston rendered at 200 DPI with component bboxes (green=connected, red=isolated), refs, and net segments — alignment verified correct against the rendered schematic. Two reference PNGs produced (`link_dist` adaptive vs 12pt).
+- **Honest limitation:** the graph is **not yet electrically faithful** — 34/63 components isolated because pin→net (D3) is still virtual-bbox-corner based. This is a *structural draft*, not a validated netlist. Don't over-claim connectivity until D3 is real.
+- No LLM query layer yet (Phase 5). No polished end-to-end "PASS" demo on multiple public schematics yet (Phase 5/6 + §10).
+
+---
+
+## 9. Remaining work (Definition of Done)
+1. ~~Fix clustering blob~~ — **DONE** (`f22b2c9`).
+2. ~~Visual debug UI~~ — **DONE** (`240358e`).
+3. **Tune link_dist** definitively using the UI (compare p60 vs ~p70/12pt across schematics); set the default.
+4. **D3 — real pin positions** from symbol geometry (replace 4 bbox-corner virtual pins). Biggest lever for connectivity; now visible in the overlay.
+5. **Reduce over-segmentation** (drop 2-segment noise clusters / merge split symbol bodies).
+6. **Phase 5 — LLM tool calling** (`get_neighbors`, `get_path`, `get_net_components`) + 20-question topology benchmark (doubles as regression test).
+7. **Phase 6 — UI polish** beyond the debug harness; portfolio framing.
+8. **B1 ML upgrade** — train RF on KiCad→PDF pairs (needs KiCad CLI); rule-based stays fallback.
+9. **Public-release gate** — §10.
+
+**DoD (target = public portfolio release):**
+- ✅ vector PDF → bipartite graph pipeline, tests green.
+- ✅ clustering produces component-scale clusters (no page-blob).
+- ✅ visual debug harness.
+- ⬜ electrically meaningful connectivity (D3 real, isolated≈0 on a clean schematic).
+- ⬜ LLM topology queries + benchmark.
+- ⬜ reproducible public demo on **synthetic** (and license-cleared) schematics.
+- ⬜ public repo + README + sample data.
+
+---
+
+## 10. Public-release checklist (the irreversible gate — do carefully)
+Before making the repo public:
+- [ ] **Bryston schematic license VERIFIED** (§13). If not redistributable, **remove it from public fixtures** and ship only synthetic `.kicad_sch`-derived samples.
+- [ ] Final scan: no proprietary/employer data in code/tests/fixtures/demo — synthetic/public only.
+- [ ] LICENSE present (pyproject declares MIT) + attribution intact.
+- [ ] README: problem → approach (geometric, no-OCR) → quickstart → demo → honest limitations (structural model, not a simulator).
+- [ ] Reproducible demo runs from a clean clone on synthetic input.
+- [ ] Tooling green from clean clone (pytest/ruff/mypy), incl. the 3 ndarray fixes (§7) if going for mypy-0.
+- [ ] Screenshots/GIF of the Streamlit overlay for the portfolio.
+
+Then: create public repo (account **D4NGYY**), push, write the portfolio writeup.
+
+---
+
+## 11. Environment & tooling
+- **OS:** Windows 11. **Python 3.12.** Project venv at `schematic_extractor/.venv` (Windows; Linux sandbox uses its own interpreter).
+- **Deps** (`pyproject.toml`): pymupdf, networkx, numpy, scikit-learn, scikit-image, scipy, matplotlib, structlog, pydantic, typer, pandas, **pillow**, pyyaml. Dev/extra: pytest, ruff, mypy, black, **streamlit**, watchdog. `[project.scripts] schematic-extractor = "src.ui.app:main"`.
+- **Run the UI:** `pip install streamlit` → `streamlit run src/ui/app.py` (sliders: DPI, link_dist; 0 = adaptive).
+- **KiCad CLI:** **not installed** → no auto KiCad→PDF render → no full round-trip test yet (§9).
+- **Filesystem quirk (this Cowork session):** file-tool writes (Windows path) and the Linux sandbox mount fell out of sync once (truncated/stale reads); resolved by writing via the sandbox shell. git `.git/*.lock` files could not be removed from the sandbox (permission) and blocked commits — cleared on the Windows side.
+
+---
+
+## 12. Artifacts & locations
+- Working branch: `feat/wire-symbol-separation` (local).
+- Source: `src/core/`, `src/ml/`, `src/ui/`.
+- Tests: `tests/` (144 passing).
+- Real input: `test_input/bryston_schematic.pdf` (license to verify).
+- Synthetic + ground truth: `data/kicad/synthetic/`, `data/ground_truth/`.
+- Reference overlays (this session): produced via `src/ui/render.py:save_overlay`.
+- This handoff: `HANDOFF.md`. Roadmap/next: `TODO.md`. Prior handoff archived under `_archive/`.
+
+---
+
+## 13. Guardrails (non-negotiable)
+- **Bryston schematic license is UNVERIFIED.** Treat as **not redistributable until confirmed**. Keep it local; do **not** put it in a public repo's fixtures. Public demo/test data = **synthetic only** (auto-generated from KiCad) until cleared.
+- **No OCR** — geometric extraction only (design choice, not a TODO).
+- **No manual labeling** — ground truth auto-derived from KiCad.
+- **Honest claims** — this is a structural model, not a validated simulator; "assist, not authority". Don't claim electrical correctness while D3 (pins) is virtual.
+- Keep tooling (pytest/ruff/mypy) green; update this HANDOFF and TODO.md after each session.
+
+---
+
+## 14. How to resume (first actions for whoever picks this up)
+1. Read §0–3 for goal, status, and the current bottleneck.
+2. Check out `feat/wire-symbol-separation`; run `pytest -q` → expect 144 passed.
+3. Launch the debug UI: `streamlit run src/ui/app.py`; load Bryston; move the `link_dist` slider and watch components/edges/isolated. Red boxes = the D3 pin→net problem to attack next.
+4. Pick up at §9 step 3 or 4: finalize `link_dist`, then make pin positions real (D3) — the highest-leverage next move, now visible in the overlay.
