@@ -81,8 +81,13 @@ class BipartiteGraphBuilder:
 
         # 2. Associazione testo
         refs, values, _ = self.text_associator.associate(page)
-        ref_map = {self._nearest_cluster(r, clusters): r for r in refs}
-        val_map = {self._nearest_cluster(v, clusters): v for v in values}
+        # D4: dict-of-list per evitare collisioni quando due ref si mappano allo stesso cluster
+        ref_map: dict[int, list[SymbolAssociation]] = {}
+        val_map: dict[int, list[SymbolAssociation]] = {}
+        for r in refs:
+            ref_map.setdefault(self._nearest_cluster(r, clusters), []).append(r)
+        for v in values:
+            val_map.setdefault(self._nearest_cluster(v, clusters), []).append(v)
 
         # 3. Classifica e crea nodi componente
         for cluster in clusters:
@@ -107,8 +112,8 @@ class BipartiteGraphBuilder:
     def _create_component_node(
         self,
         cluster: ComponentCluster,
-        ref_map: dict[int, SymbolAssociation],
-        val_map: dict[int, SymbolAssociation],
+        ref_map: dict[int, list[SymbolAssociation]],
+        val_map: dict[int, list[SymbolAssociation]],
     ) -> ComponentNode:
         """Crea un ComponentNode da un cluster con classificazione e testo."""
         class_name, confidence = "unknown", 0.0
@@ -116,8 +121,11 @@ class BipartiteGraphBuilder:
             class_name, confidence = self.classifier.predict(cluster)
         except RuntimeError:
             logger.debug("Classifier not trained, using 'unknown' fallback")
-        ref = ref_map.get(cluster.cluster_id)
-        val = val_map.get(cluster.cluster_id)
+        # D4: se più ref/val puntano allo stesso cluster, vince quello più vicino
+        ref_candidates = ref_map.get(cluster.cluster_id, [])
+        val_candidates = val_map.get(cluster.cluster_id, [])
+        ref = min(ref_candidates, key=lambda a: a.distance) if ref_candidates else None
+        val = min(val_candidates, key=lambda a: a.distance) if val_candidates else None
 
         ref_text = ref.text if ref else f"U{cluster.cluster_id}"
         val_text = val.text if val else None
@@ -139,7 +147,7 @@ class BipartiteGraphBuilder:
         """Trova l'indice del cluster più vicino a un'associazione testo."""
         best = -1
         best_dist = float("inf")
-        tx, ty = assoc.text_pos
+        tx, ty = assoc.symbol_center  # D5: usa il centro del simbolo associato, non la pos. del testo
         for cluster in clusters:
             cx, cy = cluster.center
             dist = ((tx - cx) ** 2 + (ty - cy) ** 2) ** 0.5
