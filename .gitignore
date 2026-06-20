@@ -1,3 +1,7 @@
 .aider*
 __pycache__/
 *.pyc
+data/detector/
+diagnosi_d3/_*.py
+diagnosi_d3/_*.json
+diagnosi_d3/_sweep_cache.pkl
