@@ -5,7 +5,7 @@ _Complete handoff to resume this project from any point. Last updated: 2026-06-2
 ---
 
 ## 0. TL;DR (resume in 30 seconds)
-Turns **vector** schematic PDFs into a queryable **Components↔Nets** graph (export SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. **No OCR — purely geometric extraction.** Branch `feat/wire-symbol-separation`, committed locally. Test suite **green (192 passed)**. Phase 5 (LLM tool calling) has now been **debugged end-to-end against real Ollama** — see §15. The earlier "Qwen 5/5" benchmark in prior handoffs was **invalid** (it ran against a broken `GraphContext` returning empty data; models hallucinated). The schema bug is fixed, the benchmark re-run honestly, and **qwen2.5:7b confirmed as winner (25/25, 5/5, fastest)** and wired as the single default. **Next real bottleneck remains pin→net matching (D3)** + clustering over-segmentation. End goal: **public portfolio release** (§10).
+Turns **vector** schematic PDFs into a queryable **Components↔Nets** graph (export SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. **No OCR — purely geometric extraction.** Branch `feat/wire-symbol-separation`, committed locally. Test suite **green (197 passed)**. Phase 5 (LLM tool calling) **debugged end-to-end against real Ollama** — qwen2.5:7b winner (25/25), wired as single default (§15); the prior "Qwen 5/5" claim was invalid (broken `GraphContext`, now fixed). Net connectivity **substantially improved this session** (§3): a scale-bug in `pin_tol` (ignored `scale`, used a tol ~6× too small) was fixed → arduino_micro structural **F1 0.21 → 0.36**, Bryston isolated 3 → 0; plus GT honesty (`#PWR` excluded) and label-based net merging. **Next levers:** pin over-generation in `select_pins`, noisy `net_label` association, and ref-recovery (`text_associator`). End goal: **public portfolio release** (§10).
 
 ---
 
@@ -29,9 +29,9 @@ Open-source / career-capital track. Ground truth is **auto-derived from KiCad fi
 
 ## 2. Current status (snapshot)
 - **Branch:** `feat/wire-symbol-separation` — committed locally (push status: local).
-- **Pipeline (latest on branch):** V7 text-guided clustering, V5/V6 T-/dot-junction fixes, KiCad GT parser, Phase 5 LLM layer, Phase 5 end-to-end Ollama debug (this session).
-- **Tests:** **192 passed** (`uv run python -m pytest -q`). ruff clean on touched files; mypy clean on `src/llm/`, `src/cli/query.py`. (3 pre-existing `np.ndarray` type-arg notes in `classifier.py`/`feature_extractor.py` only under stricter sandbox stubs.)
-- **Bryston page 0 graph:** 13 components · 125 nets · 44 edges · 3 isolated (RB14, R45, DX7). Adaptive link_dist ≈ 8.25pt.
+- **Pipeline (latest on branch):** V7 text-guided clustering, V5/V6 T-/dot-junction fixes, KiCad GT parser, Phase 5 LLM layer (end-to-end Ollama debug), GT honesty + label-based net merging + scale-based pin_tol net-connectivity fix (this session).
+- **Tests:** **197 passed** (`uv run python -m pytest -q`). ruff clean on touched files; mypy clean on `src/llm/`, `src/cli/query.py`, `src/core/graph_builder.py`. (3 pre-existing `np.ndarray` type-arg notes + legacy lint in `app.py`/`kicad_gt_reader.py` left untouched.)
+- **Bryston page 0 graph:** 13 components · 119 nets · 53 edges · **0 isolated** (was 3 before the pin_tol fix). Adaptive link_dist ≈ 8.25pt.
 
 ---
 
@@ -95,12 +95,14 @@ scoring) → `diagnosi_d3/benchmark_llm_results.json`. Manual/report: **`TEST_MA
 ---
 
 ## 7. Test status
-- **192 passed** (`uv run python -m pytest -q`). ruff clean on `src/llm/`, `src/cli/query.py`,
-  `diagnosi_d3/benchmark_llm.py`; mypy clean on `src/llm/` + `src/cli/query.py`.
+- **197 passed** (`uv run python -m pytest -q`). ruff clean on `src/llm/`, `src/cli/query.py`,
+  `src/core/graph_builder.py`, `diagnosi_d3/benchmark_llm.py`; mypy clean on those.
 - New tests this session: real-`bipartite`-schema GraphContext + `get_nets_summary`
-  (`tests/test_llm_tools.py`); ReAct parser shapes + non-dict guard + no-false-positive
-  (`tests/test_llm_agent.py`).
-- Note: `src/ui/app.py` still carries pre-existing trailing-whitespace ruff warnings (untouched legacy).
+  (`tests/test_llm_tools.py`); ReAct parser shapes + non-dict guard (`tests/test_llm_agent.py`);
+  GT `#PWR` exclusion (`tests/test_kicad_gt_reader.py`); label-based net merging + `pin_tol`
+  scale (`tests/test_graph_builder.py`).
+- Note: pre-existing legacy lint left untouched in `src/ui/app.py` (whitespace) and
+  `src/core/kicad_gt_reader.py`/`graph_builder.py` (`page_shape` unused, E701/B007).
 
 ---
 
@@ -119,7 +121,7 @@ scoring) → `diagnosi_d3/benchmark_llm_results.json`. Manual/report: **`TEST_MA
 1. ~~Fix clustering blob~~ / ~~Visual debug UI~~ — **DONE**.
 2. ~~Phase 5 LLM tool calling + real-Ollama benchmark~~ — **DONE** (this session).
 3. **Tune link_dist** definitively via the UI; set the default.
-4. **D3 — real pin positions** from symbol geometry (replace 4 bbox-corner virtual pins). Biggest connectivity lever.
+4. ~~Net connectivity — scale-based `pin_tol`~~ **DONE** (this session): micro F1 0.21→0.36, Bryston isolated→0. **Remaining levers:** pin over-generation (`select_pins`), noisy `net_label` association, ref-recovery (`text_associator`, nano 3/34).
 5. **Reduce over-segmentation** (drop 2-segment noise clusters / merge split symbol bodies).
 6. **Phase 6 — UI polish** beyond the debug harness; portfolio framing.
 7. **B1 ML upgrade** — train RF on KiCad→PDF pairs (needs KiCad CLI).
@@ -130,7 +132,7 @@ scoring) → `diagnosi_d3/benchmark_llm_results.json`. Manual/report: **`TEST_MA
 - ✅ clustering produces component-scale clusters (no page-blob).
 - ✅ visual debug harness.
 - ✅ LLM topology queries working end-to-end + scored benchmark.
-- ⬜ electrically meaningful connectivity (D3 real, isolated≈0 on a clean schematic).
+- 🟡 electrically meaningful connectivity — improved (micro F1 0.36, Bryston isolated 0) but not yet ≈complete; pin over-generation + ref-recovery remain.
 - ⬜ reproducible public demo on synthetic (and license-cleared) schematics.
 - ⬜ public repo + README + sample data.
 
@@ -179,9 +181,9 @@ Then: create public repo (account **D4NGYY**), push, write the portfolio writeup
 
 ## 14. How to resume (first actions)
 1. Read §0–3 for goal, status, and the current bottleneck.
-2. `pytest -q` → expect 192 passed. `ollama serve` + pull the 3 models (§11).
+2. `pytest -q` → expect 197 passed. `ollama serve` + pull the 3 models (§11).
 3. LLM: `uv run schematic-extractor query "Quali componenti sono isolati?" --pdf test_input/bryston_schematic.pdf` → expect `RB14, R45, DX7`. Re-run the benchmark with `uv run python diagnosi_d3/benchmark_llm.py`.
-4. Highest-leverage next move: **D3 real pin positions** (§9.4) — visible in the Streamlit overlay (red boxes = isolated). This is what limits connectivity, not the LLM layer.
+4. Net-connectivity F1: `uv run python diagnosi_d3/true_f1_validation.py` → expect micro f1_new ≈ 0.356. Next levers (TODO P4): (1) **pin over-generation** in `select_pins` (988 pins/112 comps → inflates fp), (2) noisy `net_label` association, (3) **ref-recovery** in `text_associator` (arduino_nano matches only 3/34 GT refs). Use the overlay (`src/ui/render.py:save_overlay`) to tune visually.
 
 ---
 
