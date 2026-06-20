@@ -5,7 +5,7 @@ _Complete handoff to resume this project from any point. Last updated: 2026-06-2
 ---
 
 ## 0. TL;DR (resume in 30 seconds)
-Turns **vector** schematic PDFs into a queryable **Components↔Nets** graph (export SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. **No OCR — purely geometric extraction.** Branch `feat/wire-symbol-separation`, committed locally. Test suite **green (197 passed)**. Phase 5 (LLM tool calling) **debugged end-to-end against real Ollama** — qwen2.5:7b winner (25/25), wired as single default (§15); the prior "Qwen 5/5" claim was invalid (broken `GraphContext`, now fixed). Net connectivity **substantially improved this session** (§3): a scale-bug in `pin_tol` (ignored `scale`, used a tol ~6× too small) was fixed → arduino_micro structural **F1 0.21 → 0.36**, Bryston isolated 3 → 0; plus GT honesty (`#PWR` excluded) and label-based net merging. **Next levers:** pin over-generation in `select_pins`, noisy `net_label` association, and ref-recovery (`text_associator`). End goal: **public portfolio release** (§10).
+Turns schematic PDFs into a queryable **Components↔Nets** graph (export SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. Extraction is geometric (vector layer); an **OCR fallback** (RapidOCR, optional `[ocr]` extra) kicks in for text-less CAD-export PDFs. Branch `feat/wire-symbol-separation`, committed locally. Test suite **green (210 passed)**. Phase 5 (LLM tool calling) **debugged end-to-end against real Ollama** — qwen2.5:7b winner (25/25), single default (§15). Net connectivity improved over the last sessions (§3): scale-based `pin_tol` fix (micro **F1 0.21 → 0.36**), `#PWR` GT honesty, `label_tol_factor=6` net merge. **OCR fallback this session** unblocked text-less PDFs: **arduino_nano F1 0.03 → 0.16** (refs 0 → 12). **Root-caused the F1 ceiling (§3):** it is a **ref→cluster collision** (45 GT ref-texts collapse onto 24 clusters → 24 refs lost); two targeted fixes both regress F1 — the real cure is geometric re-segmentation (large). End goal: **public portfolio release** (§10).
 
 ---
 
@@ -19,8 +19,8 @@ A pipeline that reconstructs the **electrical topology** of a legacy/vector sche
 - Legacy schematics (service manuals, CAD exports) are locked as pixels/vectors with no machine-readable topology. Bridging them to modern simulation/versioning is a real, underserved problem.
 - Strategic value accrues from the build itself (skills + public artifact), independent of adoption.
 
-### 1c. Design choice: geometric, not OCR
-Extraction is **purely geometric** (segments, shapes, text spans from the vector layer) — *not* OCR. OCR is unreliable on dense schematics with tiny labels and crossing wires. This project does **not** read raster PDFs and does **not** replace a simulator — it produces a *structural* model, not validated electrical behavior.
+### 1c. Design choice: geometric first, OCR fallback
+Extraction is **geometric by default** (segments, shapes, text spans from the vector layer). For PDFs that ship **no text layer** (CAD exports with outlined fonts, e.g. arduino_nano), a **RapidOCR fallback** rasterizes the page and recovers ref/label text *with bounding boxes* so association still works (optional `[ocr]` extra, lazy import, fires only when the native text layer is empty — see §3/§17). This project does **not** replace a simulator — it produces a *structural* model, not validated electrical behavior. _(Historical note: earlier the project was strictly no-OCR; the OCR fallback was added deliberately once the user provided a working RapidOCR extractor to adapt.)_
 
 ### 1d. Track context
 Open-source / career-capital track. Ground truth is **auto-derived from KiCad files** (no manual labeling). The public release is the milestone (§10).
@@ -29,9 +29,10 @@ Open-source / career-capital track. Ground truth is **auto-derived from KiCad fi
 
 ## 2. Current status (snapshot)
 - **Branch:** `feat/wire-symbol-separation` — committed locally (push status: local).
-- **Pipeline (latest on branch):** V7 text-guided clustering, V5/V6 T-/dot-junction fixes, KiCad GT parser, Phase 5 LLM layer (end-to-end Ollama debug), GT honesty + label-based net merging + scale-based pin_tol net-connectivity fix (this session).
-- **Tests:** **197 passed** (`uv run python -m pytest -q`). ruff clean on touched files; mypy clean on `src/llm/`, `src/cli/query.py`, `src/core/graph_builder.py`. (3 pre-existing `np.ndarray` type-arg notes + legacy lint in `app.py`/`kicad_gt_reader.py` left untouched.)
-- **Bryston page 0 graph:** 13 components · 119 nets · 53 edges · **0 isolated** (was 3 before the pin_tol fix). Adaptive link_dist ≈ 8.25pt.
+- **Pipeline (latest on branch):** V7 text-guided clustering, V5/V6 T-/dot-junction fixes, KiCad GT parser, Phase 5 LLM layer, GT honesty + label-based net merging + scale-based pin_tol, **OCR fallback for text-less PDFs** (this session).
+- **Tests:** **210 passed** (`uv run python -m pytest -q`). ruff + mypy clean on `src/core/ocr_fallback.py`, `src/core/pdf_parser.py`, `src/core/graph_builder.py`, `src/llm/`. (Legacy lint in `app.py`/`kicad_gt_reader.py` left untouched.)
+- **F1 (GT-measured, `PYTHONHASHSEED=0` for stable greedy tie-break):** arduino_micro **0.356** (overlap 24/48), arduino_nano **0.159** (overlap 10/34, was 0.03 pre-OCR).
+- **Bryston page 0 graph:** 13 components · 119 nets · 53 edges · **0 isolated**. Adaptive link_dist ≈ 8.25pt.
 
 ---
 
@@ -40,8 +41,11 @@ Open-source / career-capital track. Ground truth is **auto-derived from KiCad fi
 - **Resolved — T-junction/Dot-junction (V5/V6):** wires at T-/dot-junctions merge into degree-3+ nets.
 - **Resolved — over-segmentation (V7):** `_text_guided_merge` uses ref-designator texts as gravity wells (Arduino Micro 193→112 components, F1 0.08→0.21).
 - **Resolved — LLM tool layer broken on real graphs (this session, §15):** `GraphContext` was reading the wrong node/edge schema; fixed + re-benchmarked.
-- **Net connectivity — MAJOR FIX 2026-06-20 (measured on GT F1).** Root cause was a **scale bug**: `_connect_pins_to_nets` ignored its `scale` arg and used `pin_tol = 3×wire_tol` (≈4 on micro), ~6× smaller than the real pin→net gaps (~25). Fixed: `pin_tol = max(3×wire_tol, scale × pin_tol_factor)` with `pin_tol_factor=2.0` (data-derived `scale` = p10 segment length). Results (arduino_micro): **F1 0.209 → 0.356 (+70%)**, max net degree 2 → 6, dead nets 77 → 24, isolated components 76 → 22; Bryston isolated 3 → 0; no regressions (197 tests). This also **unblocked the label-merge** (GND now merges, since pins reach nets near power symbols).
-- **Remaining net-connectivity levers (open):** (1) **pin over-generation** — `select_pins`/`free_endpoints` returns symbol-internal & text endpoints (988 "pins" for 112 comps), inflating fp; (2) **power symbols still partly isolated** — 22 left, mostly GND/+5V symbols whose stubs don't reach a net; (3) **noisy `net_label` association** (grabs part numbers like `ATMEGA32U4-XUMU`). Second independent lever: **ref-recovery** (`text_associator`) — arduino_nano matches only 3/34 GT refs, capping its F1 at ~0.03. Reproduce overlay: `save_overlay(...)` in `src/ui/render.py`. See TODO P4.
+- **Net connectivity — scale-based pin_tol fix (measured on GT F1).** `_connect_pins_to_nets` used `pin_tol = 3×wire_tol` (≈4 on micro), ~6× smaller than real pin→net gaps. Fixed: `pin_tol = max(3×wire_tol, scale × pin_tol_factor)`, `pin_tol_factor=2.0`. arduino_micro **F1 0.209 → 0.356**, Bryston isolated 3 → 0. `label_tol_factor=6.0` then consolidated GND/VCC (netmaxdeg 6→12, F1-neutral).
+- **OCR fallback (this session) — unblocked text-less PDFs.** arduino_nano had `texts=0` (outlined fonts) → refs 0/34. `src/core/ocr_fallback.py` (RapidOCR, keeps bounding boxes) fires when the native text layer < 16 chars. **nano: texts 0→281, refs 0→12, overlap 3→10/34, F1 0.030→0.159.** micro unchanged (has a text layer). See §17.
+- **ROOT CAUSE of the F1 ceiling — ref→cluster collision (diagnosed this session).** The metric is gated on `overlap_refs` (micro 24/48). Measured: **45 GT ref-texts ARE extracted**, but `_nearest_cluster` binds each to the nearest cluster center and `_create_component_node` keeps **only one ref per cluster** → they collapse onto 24 distinct clusters, **losing 24 GT refs**. Two failure modes: (A) under-segmentation — adjacent components fused into one giant cluster (R5/R6/R7/R8 all at dist 6.7 in one 54-segment cluster; TP1+TP2 together); (B) refs with no real cluster falling onto tiny noise fragments.
+  - **Two targeted fixes tried, both regress F1 (reverted):** (1) one node per distinct ref (share cluster) → recall recovers (overlap 24→41) but **fp explodes 13→58** (co-clustered comps share nets) → F1 0.356→0.352; (2) + partition pins by ref-pos → fp drops 58→8 but **tp collapses 50→37** → F1 0.356→**0.335**. You cannot rebuild connectivity from a fused blob without true **geometric segment-level re-segmentation** (split a cluster's *segments* per ref, not just its pins). That is a substantial `src/ml/clustering.py` rewrite with uncertain payoff — **not yet attempted.** See TODO P4 item 5.
+- **Measured-dead levers (do not retry):** pin over-generation (fp already ~13, not 988), aggressive `label_tol_factor` (collapses distinct nets, F1 down), higher OCR dpi (300→500 flat). Reproduce overlay: `save_overlay(...)` in `src/ui/render.py`.
 
 ---
 
@@ -95,14 +99,12 @@ scoring) → `diagnosi_d3/benchmark_llm_results.json`. Manual/report: **`TEST_MA
 ---
 
 ## 7. Test status
-- **197 passed** (`uv run python -m pytest -q`). ruff clean on `src/llm/`, `src/cli/query.py`,
-  `src/core/graph_builder.py`, `diagnosi_d3/benchmark_llm.py`; mypy clean on those.
-- New tests this session: real-`bipartite`-schema GraphContext + `get_nets_summary`
-  (`tests/test_llm_tools.py`); ReAct parser shapes + non-dict guard (`tests/test_llm_agent.py`);
-  GT `#PWR` exclusion (`tests/test_kicad_gt_reader.py`); label-based net merging + `pin_tol`
-  scale (`tests/test_graph_builder.py`).
-- Note: pre-existing legacy lint left untouched in `src/ui/app.py` (whitespace) and
-  `src/core/kicad_gt_reader.py`/`graph_builder.py` (`page_shape` unused, E701/B007).
+- **210 passed** (`uv run python -m pytest -q`). ruff + mypy clean on `src/core/ocr_fallback.py`,
+  `src/core/pdf_parser.py`, `src/core/graph_builder.py`, `src/llm/`.
+- New tests this session: **OCR fallback** — 11 tests in `tests/test_ocr_fallback.py` (rows→PDF-coord
+  blocks, confidence filter, char-count threshold, VectorExtractor hook fires only when text layer
+  empty — all with a fake engine, no ONNX). Plus label-tol semantics in `tests/test_graph_builder.py`.
+- Note: legacy lint left untouched in `src/ui/app.py` and `src/core/kicad_gt_reader.py`.
 
 ---
 
@@ -112,7 +114,7 @@ scoring) → `diagnosi_d3/benchmark_llm_results.json`. Manual/report: **`TEST_MA
   `RB14, R45, DX7` + `Net-6 (WB1,PR2), Net-46 (WB1,RB10), Net-81 (RF1,R37)` — correct on real data.
 - **Benchmark (3 models × 5 Bryston queries, tool-gated):** qwen2.5 **25/25 (5/5, 3.24s)**,
   llama3.1 21/25 (4/5, 3.67s), mistral 20/25 (4/5, 4.64s). See `TEST_MANUAL.md` §4.
-- **Net connectivity F1 (GT-measured, default pin_tol_factor=2.0):** arduino_micro f1_new **0.356** (tp 32, was 0.209), arduino_nano 0.030 (capped by ref-recovery, overlap 3/34). Run `uv run python diagnosi_d3/true_f1_validation.py`.
+- **Net connectivity F1 (GT-measured; use `PYTHONHASHSEED=0` — the greedy net-mapping tie-break is hash-order-sensitive, ±1 tp otherwise):** arduino_micro **0.356** (overlap 24/48), arduino_nano **0.159** (overlap 10/34, was 0.030 before the OCR fallback). Run `PYTHONHASHSEED=0 uv run python diagnosi_d3/true_f1_validation.py`.
 - No polished public end-to-end demo on multiple schematics yet (Phase 6 + §10).
 
 ---
@@ -121,8 +123,8 @@ scoring) → `diagnosi_d3/benchmark_llm_results.json`. Manual/report: **`TEST_MA
 1. ~~Fix clustering blob~~ / ~~Visual debug UI~~ — **DONE**.
 2. ~~Phase 5 LLM tool calling + real-Ollama benchmark~~ — **DONE** (this session).
 3. **Tune link_dist** definitively via the UI; set the default.
-4. ~~Net connectivity — scale-based `pin_tol`~~ **DONE** (this session): micro F1 0.21→0.36, Bryston isolated→0. **Remaining levers:** pin over-generation (`select_pins`), noisy `net_label` association, ref-recovery (`text_associator`, nano 3/34).
-5. **Reduce over-segmentation** (drop 2-segment noise clusters / merge split symbol bodies).
+4. ~~Net connectivity — scale-based `pin_tol`~~ + ~~`label_tol_factor`~~ + ~~OCR fallback (nano 0.03→0.16)~~ — **DONE**.
+5. **Geometric re-segmentation (THE remaining F1 lever, hard):** split under-segmented clusters per ref at the *segment* level so each GT designator becomes its own component with its own pins/nets. Root-caused + two simple fixes proven to regress F1 (§3, TODO P4 item 5). Big `src/ml/clustering.py` rewrite, uncertain payoff — decide before investing.
 6. **Phase 6 — UI polish** beyond the debug harness; portfolio framing.
 7. **B1 ML upgrade** — train RF on KiCad→PDF pairs (needs KiCad CLI).
 8. **Public-release gate** — §10.
@@ -132,7 +134,7 @@ scoring) → `diagnosi_d3/benchmark_llm_results.json`. Manual/report: **`TEST_MA
 - ✅ clustering produces component-scale clusters (no page-blob).
 - ✅ visual debug harness.
 - ✅ LLM topology queries working end-to-end + scored benchmark.
-- 🟡 electrically meaningful connectivity — improved (micro F1 0.36, Bryston isolated 0) but not yet ≈complete; pin over-generation + ref-recovery remain.
+- 🟡 electrically meaningful connectivity — improved (micro F1 0.36, nano 0.16 via OCR, Bryston isolated 0) but capped by the ref→cluster collision (§3); geometric re-segmentation remains.
 - ⬜ reproducible public demo on synthetic (and license-cleared) schematics.
 - ⬜ public repo + README + sample data.
 
@@ -162,7 +164,7 @@ Then: create public repo (account **D4NGYY**), push, write the portfolio writeup
 ## 12. Artifacts & locations
 - Working branch: `feat/wire-symbol-separation` (local).
 - Source: `src/core/`, `src/ml/`, `src/ui/`, `src/llm/`, `src/cli/`.
-- Tests: `tests/` (192 passing).
+- Tests: `tests/` (210 passing).
 - Real input: `test_input/bryston_schematic.pdf` (license to verify).
 - Synthetic + ground truth: `data/kicad/synthetic/`, `data/ground_truth/`.
 - LLM benchmark: `diagnosi_d3/benchmark_llm.py` + `diagnosi_d3/benchmark_llm_results.json`.
@@ -172,7 +174,7 @@ Then: create public repo (account **D4NGYY**), push, write the portfolio writeup
 
 ## 13. Guardrails (non-negotiable)
 - **Bryston schematic license UNVERIFIED** — treat as not redistributable; keep local; public demo data = synthetic only until cleared.
-- **No OCR** — geometric extraction only.
+- **OCR only as fallback** — geometric extraction is primary; RapidOCR fires *only* when a page has no usable text layer (optional `[ocr]` extra). Never OCR a page that already has vector text.
 - **No manual labeling** — ground truth auto-derived from KiCad.
 - **Honest claims** — structural model, not a validated simulator. The LLM answers strictly from tool results; do not let it invent components/nets.
 - Keep tooling (pytest/ruff/mypy) green; update HANDOFF + TODO after each session.
@@ -180,10 +182,10 @@ Then: create public repo (account **D4NGYY**), push, write the portfolio writeup
 ---
 
 ## 14. How to resume (first actions)
-1. Read §0–3 for goal, status, and the current bottleneck.
-2. `pytest -q` → expect 197 passed. `ollama serve` + pull the 3 models (§11).
-3. LLM: `uv run schematic-extractor query "Quali componenti sono isolati?" --pdf test_input/bryston_schematic.pdf` → expect `RB14, R45, DX7`. Re-run the benchmark with `uv run python diagnosi_d3/benchmark_llm.py`.
-4. Net-connectivity F1: `uv run python diagnosi_d3/true_f1_validation.py` → expect micro f1_new ≈ 0.356. Next levers (TODO P4): (1) **pin over-generation** in `select_pins` (988 pins/112 comps → inflates fp), (2) noisy `net_label` association, (3) **ref-recovery** in `text_associator` (arduino_nano matches only 3/34 GT refs). Use the overlay (`src/ui/render.py:save_overlay`) to tune visually.
+1. Read §0–3 for goal, status, and the current bottleneck (ref→cluster collision).
+2. `pytest -q` → expect **210 passed**. For LLM: `ollama serve` + pull the 3 models (§11). For OCR: `uv sync --extra ocr --extra dev`.
+3. LLM: `uv run schematic-extractor query "Quali componenti sono isolati?" --pdf test_input/bryston_schematic.pdf` → expect `RB14, R45, DX7`.
+4. Net-connectivity F1: `PYTHONHASHSEED=0 uv run python diagnosi_d3/true_f1_validation.py` → expect micro **0.356** / nano **0.159**. **The only remaining F1 lever is geometric re-segmentation** (§3, TODO P4 item 5) — a hard `src/ml/clustering.py` rewrite; two simpler fixes are already proven to regress F1, and pin-over-generation / label-tol / OCR-dpi are measured-dead. Decide whether to invest before coding.
 
 ---
 
@@ -216,3 +218,12 @@ uv run python diagnosi_d3/benchmark_llm.py
 # Streamlit UI (PDF picker, link_dist slider, Chat tab)
 streamlit run src/ui/app.py
 ```
+
+---
+
+## 17. OCR fallback (Phase: text-less PDFs)
+- **Why:** CAD-export PDFs with outlined fonts (arduino_nano) have no text layer → `get_text` returns nothing → ref/label association starves (refs 0/34).
+- **What:** `src/core/ocr_fallback.py` — rasterizes the page (`fitz`, dpi=300) and runs **RapidOCR**, emitting `PDFTextBlock` with **bounding boxes** in PDF coords (pixel ÷ scale). Adapted from the librechat `rag_api/app/utils/ocr.py` approach, but that module discarded `box[0]`; here the box is kept (positions are what bind a ref to its component). Engine is injectable → unit-testable without ONNX.
+- **Hook:** `VectorExtractor._maybe_ocr` runs only when the native text layer has < 16 non-whitespace chars, so text-rich pages (micro: 498 blocks) are untouched. Lazy import; degrades gracefully if the `[ocr]` extra isn't installed.
+- **Dependency:** `rapidocr-onnxruntime` as optional `[ocr]` extra (`uv sync --extra ocr`). Pulls onnxruntime + opencv.
+- **Result:** nano texts 0→281, refs 0→12, overlap 3→10/34, **F1 0.030→0.159**. Residual: OCR misreads in labels (V↔U, 7↔Z) — but these are not the F1 blocker (the blocker is the ref→cluster collision, §3). Higher dpi (400/500) measured flat.
