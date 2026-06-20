@@ -36,3 +36,35 @@ because it guessed pins from wires; the detector removes the guess.
   parts is weak (dataset builder takes `--dpi`).
 - Oracle showed perfect components alone gave inconsistent F1 gains; the win
   depends on combining detector pins with the existing wire extraction. Measure.
+
+## Integration usage (once `best.pt` exists)
+`DetectorComponentSource` (src/ml/detector_source.py) is the glue. Default pipeline
+is unchanged; pass `detector_components` to opt in:
+
+```python
+import fitz
+from ultralytics import YOLO
+from src.core.pdf_parser import VectorExtractor
+from src.core.graph_builder import BipartiteGraphBuilder
+from src.ml.detector_source import Detection, DetectorComponentSource
+
+DPI = 150  # MUST match scripts/build_detector_dataset.py --dpi
+model = YOLO("runs/detect/schematic_detector/weights/best.pt")
+
+pdf = "test_input/multi_schematic/sallen_key/sallen_key.pdf"
+page = VectorExtractor().extract(pdf)[0]
+img = f"data/detector/images/sallen_key.png"  # or render page 0 at DPI
+
+r = model(img)[0]
+dets = [
+    Detection(class_name=r.names[int(c)], bbox_px=tuple(xyxy), confidence=float(p))
+    for xyxy, c, p in zip(r.boxes.xyxy.tolist(), r.boxes.cls.tolist(), r.boxes.conf.tolist())
+]
+comps = DetectorComponentSource(dpi=DPI).components(dets, page)
+graph = BipartiteGraphBuilder().build_from_page(page, detector_components=comps)
+```
+
+**Immediate post-training step:** add a detector-path branch to
+`diagnosi_d3/f1_all_boards.py` (build with `detector_components`) and compare net-F1
+vs the geometric baseline (0.481 real-circuit mean) and the oracle ceiling. That
+number is the verdict on whether the detector delivers "make it actually work".
