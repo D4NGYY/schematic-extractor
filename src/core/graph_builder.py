@@ -86,7 +86,7 @@ class BipartiteGraphBuilder:
 
         # 1. Clustering spaziale: SOLO symbol-primitive
         clusterer = SpatialClusterer(eps=self.cluster_eps)
-        page_shape = (page.width, page.height) if hasattr(page, "width") else (1000, 1000)
+        page_shape = (getattr(page, "width", 1000), getattr(page, "height", 1000))
         clusters = clusterer.cluster(symbol_segs, page.shapes, text_blocks=page.text_blocks)
 
         # 2. Associazione testo
@@ -268,7 +268,7 @@ class BipartiteGraphBuilder:
                     best_net = n.net_id
         return best_net
 
-    def _build_nets(self, wire_segs: list[PDFSegment], scale: float, junctions: list[Any] = None) -> None:
+    def _build_nets(self, wire_segs: list[PDFSegment], scale: float, junctions: list[Any] | None = None) -> None:
         if not wire_segs:
             return
 

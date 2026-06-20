@@ -1,5 +1,4 @@
 import urllib.request
-import os
 from pathlib import Path
 
 downloads = [
@@ -23,12 +22,12 @@ downloads = [
 def main():
     base_dir = Path("test_input/multi_schematic")
     base_dir.mkdir(parents=True, exist_ok=True)
-    
+
     for item in downloads:
         dir_path = base_dir / item["name"]
         dir_path.mkdir(exist_ok=True)
         file_path = dir_path / item["file"]
-        
+
         print(f"Downloading {item['name']} from {item['url']}...")
         try:
             req = urllib.request.Request(item["url"], headers={'User-Agent': 'Mozilla/5.0'})

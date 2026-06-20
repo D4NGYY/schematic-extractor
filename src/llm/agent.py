@@ -1,10 +1,11 @@
 import json
 import re
-import structlog
 from typing import Any
-from pydantic import BaseModel
+
 import openai
-from src.llm.tools import GraphContext, TOOLS_SCHEMA
+import structlog
+
+from src.llm.tools import TOOLS_SCHEMA, GraphContext
 
 logger = structlog.get_logger("agent")
 
@@ -31,7 +32,7 @@ class OllamaClient(LLMClient):
         }
         if tools:
             kwargs["tools"] = tools
-        
+
         response = await self.client.chat.completions.create(**kwargs)
         return response.choices[0].message
 
@@ -40,17 +41,17 @@ class MockClient(LLMClient):
     """Mock client for testing without network."""
     def __init__(self) -> None:
         self.call_count = 0
-        
+
     async def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> Any:
         self.call_count += 1
         # Simple mock logic based on the last message
         last_msg = messages[-1]["content"] if messages[-1].get("content") else ""
-        
+
         class MockMessage:
             def __init__(self, content: str | None, tool_calls: list[Any] | None = None) -> None:
                 self.content = content
                 self.tool_calls = tool_calls
-                
+
         class MockToolCall:
             def __init__(self, name: str, arguments: str) -> None:
                 self.id = f"call_{name}"
@@ -60,7 +61,7 @@ class MockClient(LLMClient):
                 self.function = Function()
                 self.function.name = name
                 self.function.arguments = arguments
-                
+
         if self.call_count == 1:
             # First turn: trigger a tool call for get_neighbors
             return MockMessage(
@@ -74,7 +75,7 @@ class MockClient(LLMClient):
 
 class SchematicAgent:
     """Agent loop handling LLM conversation and tool dispatching."""
-    
+
     def __init__(self, graph_context: GraphContext, llm_client: LLMClient, max_iterations: int = 10):
         self.graph_context = graph_context
         self.llm_client = llm_client
@@ -96,11 +97,11 @@ class SchematicAgent:
             kwargs = json.loads(arguments_str)
         except json.JSONDecodeError:
             return '{"error": "Malformed JSON arguments"}'
-            
+
         method = getattr(self.graph_context, name, None)
         if not method:
             return json.dumps({"error": f"Tool {name} not found"})
-            
+
         try:
             result = method(**kwargs)
             return json.dumps(result)
@@ -122,14 +123,14 @@ class SchematicAgent:
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": user_question}
         ]
-        
+
         for iteration in range(self.max_iterations):
             logger.info("agent_iteration", iteration=iteration+1)
             response_msg = await self.llm_client.chat(messages, tools=TOOLS_SCHEMA)
-            
+
             has_native_tools = bool(getattr(response_msg, "tool_calls", None))
             content = getattr(response_msg, "content", "") or ""
-            
+
             # Record the assistant's message
             msg_dict: dict[str, Any] = {"role": "assistant"}
             if content:
@@ -148,16 +149,16 @@ class SchematicAgent:
                     for tc in response_msg.tool_calls
                 ]
             messages.append(msg_dict)
-            
+
             # Handle native tool calls
             if has_native_tools:
                 for tool_call in response_msg.tool_calls:
                     name = tool_call.function.name
                     args_str = tool_call.function.arguments
                     logger.debug("executing_native_tool", name=name, args=args_str)
-                    
+
                     result_str = self._execute_tool(name, args_str)
-                    
+
                     if "Malformed JSON" in result_str:
                         messages.append({
                             "role": "tool",
@@ -173,16 +174,16 @@ class SchematicAgent:
                             "content": result_str
                         })
                 continue  # Go to next iteration to let LLM process tool outputs
-                
+
             # Handle ReAct-style text tool calls (Fallback)
             if content:
                 react_call = self._parse_react_tool_call(content)
                 if react_call:
                     name, args_str = react_call
                     logger.debug("executing_react_tool", name=name, args=args_str)
-                    
+
                     result_str = self._execute_tool(name, args_str)
-                    
+
                     # Instead of formal tool role (which requires tool_call_id),
                     # we just append a user message with the observation
                     if "Malformed JSON" in result_str:
@@ -196,8 +197,8 @@ class SchematicAgent:
                             "content": f"Observation: {result_str}"
                         })
                     continue
-            
+
             # If no tools called (native or react), we are done
             return content
-            
+
         return "Could not answer within max iterations."

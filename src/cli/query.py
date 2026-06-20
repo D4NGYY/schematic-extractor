@@ -1,12 +1,14 @@
 import asyncio
-import typer
-import structlog
 from pathlib import Path
-from src.core.pdf_parser import VectorExtractor
+
+import structlog
+import typer
+
 from src.core.graph_builder import BipartiteGraphBuilder
+from src.core.pdf_parser import VectorExtractor
 from src.core.text_associator import TextAssociator
+from src.llm.agent import LLMClient, MockClient, OllamaClient, SchematicAgent
 from src.llm.tools import GraphContext
-from src.llm.agent import SchematicAgent, OllamaClient, MockClient, LLMClient
 
 app = typer.Typer(help="CLI per l'agente LLM Schematic Extractor")
 logger = structlog.get_logger("cli")
@@ -28,9 +30,9 @@ def query_cmd(
     if not pdf.exists():
         typer.secho(f"Errore: Il file {pdf} non esiste.", fg=typer.colors.RED)
         raise typer.Exit(1)
-        
+
     typer.secho(f"Estrazione del grafo da {pdf}...", fg=typer.colors.CYAN)
-    
+
     # 1. Parsing del PDF
     parser = VectorExtractor()
     try:
@@ -38,20 +40,20 @@ def query_cmd(
     except Exception as e:
         typer.secho(f"Errore nel parsing PDF: {e}", fg=typer.colors.RED)
         raise typer.Exit(1)
-        
+
     if not pages:
         typer.secho("Errore: Nessuna pagina valida estratta.", fg=typer.colors.RED)
         raise typer.Exit(1)
-        
+
     page = pages[0]
-    
+
     # 2. Costruzione del grafo bipartito
     text_associator = TextAssociator()
     builder = BipartiteGraphBuilder(text_associator=text_associator)
     graph = builder.build_from_page(page)
-    
+
     typer.secho(f"Grafo costruito: {graph.number_of_nodes()} nodi, {graph.number_of_edges()} archi.", fg=typer.colors.GREEN)
-    
+
     # 3. Inizializzazione LLM
     graph_context = GraphContext(graph)
     client: LLMClient
@@ -61,15 +63,15 @@ def query_cmd(
     else:
         typer.secho(f"Uso OllamaClient (modello: {model}).", fg=typer.colors.YELLOW)
         client = OllamaClient(model=model)
-        
+
     agent = SchematicAgent(graph_context=graph_context, llm_client=client)
-    
+
     # 4. Esecuzione query
     typer.secho("\nQuery: " + question, fg=typer.colors.MAGENTA)
     typer.secho("Agente in elaborazione...\n", fg=typer.colors.CYAN)
-    
+
     response = asyncio.run(agent.query(question))
-    
+
     typer.secho("Risposta:", fg=typer.colors.GREEN, bold=True)
     typer.echo(response)
 

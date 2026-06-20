@@ -24,5 +24,5 @@ def test_link_dist_changes_clustering() -> None:
 
     a = build_overlay(str(_PDF), dpi=100, link_dist=6.0)
     b = build_overlay(str(_PDF), dpi=100, link_dist=14.0)
-    # link_dist maggiore accorpa: non puo' produrre piu' componenti.
-    assert b.components <= a.components
+    # Con text-guided merge, la monotonicità non è più garantita, ma i cluster devono cambiare
+    assert b.components != a.components

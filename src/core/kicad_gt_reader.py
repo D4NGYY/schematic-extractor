@@ -127,8 +127,8 @@ def parse_kicad_sch(path: Path | str) -> KicadSchematic:
                 continue
             lib_id = sym[1]
             pins = []
-            
-            def extract_pins_recursive(node):
+
+            def extract_pins_recursive(node: Any) -> None:
                 for child in node:
                     if isinstance(child, list) and child:
                         if child[0] == "pin":
@@ -142,7 +142,7 @@ def parse_kicad_sch(path: Path | str) -> KicadSchematic:
                                 pins.append((pin_num, px, py, rot))
                         elif child[0] == "symbol":
                             extract_pins_recursive(child)
-                            
+
             extract_pins_recursive(sym)
             if pins:
                 lib_pins[lib_id] = pins
@@ -186,12 +186,12 @@ def parse_kicad_sch(path: Path | str) -> KicadSchematic:
         lib_id_node = _find_first(sym, "lib_id")
         at_node = _find_first(sym, "at")
         mirror_node = _find_first(sym, "mirror")
-        
+
         lib_id = lib_id_node[1] if lib_id_node else ""
         x = float(at_node[1]) if at_node else 0.0
         y = float(at_node[2]) if at_node else 0.0
         rot = float(at_node[3]) if (at_node and len(at_node) > 3) else 0.0
-        
+
         mirror_x = False
         mirror_y = False
         if mirror_node and len(mirror_node) > 1:
@@ -215,13 +215,13 @@ def parse_kicad_sch(path: Path | str) -> KicadSchematic:
                 inline_pins = True
                 px, py = float(p_at[1]), float(p_at[2])
                 symbol.pins.append(KicadPin(ref=ref, pin_num=pin_num, x=px, y=py))
-                
+
         # If no inline pins, look up lib_pins and transform
         if not inline_pins and lib_id in lib_pins:
             angle_rad = math.radians(rot)
             cos_a = math.cos(angle_rad)
             sin_a = math.sin(angle_rad)
-            
+
             for pin_num, px, py, prot in lib_pins[lib_id]:
                 # 1. Mirror
                 mx = -px if mirror_x else px
@@ -258,7 +258,7 @@ def build_gt_graph(sch: KicadSchematic) -> GTGraph:
         adj[p1].add(p2)
         adj[p2].add(p1)
 
-    # Note: T-junctions in KiCad are typically split into multiple wire segments 
+    # Note: T-junctions in KiCad are typically split into multiple wire segments
     # that share a common endpoint. Or there's a junction point.
     # If a junction point falls ON a wire, we split the wire.
     for j in sch.junctions:
@@ -269,7 +269,7 @@ def build_gt_graph(sch: KicadSchematic) -> GTGraph:
             p2 = (round(w.x2, 3), round(w.y2, 3))
             if p1 == (jx, jy) or p2 == (jx, jy):
                 continue
-            
+
             # Distance check to see if J is on the segment P1-P2
             import math
             L = math.hypot(p2[0]-p1[0], p2[1]-p1[1])
@@ -305,7 +305,7 @@ def build_gt_graph(sch: KicadSchematic) -> GTGraph:
 
     # For points without wires (e.g. isolated label or pin)
     # We will just map them directly to a point group.
-    
+
     # Map each (x,y) to a net_id
     pt_to_net: dict[tuple[float, float], str] = {}
     for i, group in enumerate(net_groups):
@@ -345,7 +345,7 @@ def build_gt_graph(sch: KicadSchematic) -> GTGraph:
             renamed_nets[name].update(pins)
         else:
             renamed_nets[name] = pins
-    
+
     graph.nets = renamed_nets
     graph.net_count = len(set(pt_to_net.values()))
 
