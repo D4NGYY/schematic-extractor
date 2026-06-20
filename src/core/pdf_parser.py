@@ -240,9 +240,24 @@ class VectorExtractor:
     3. Unisce span frammentati basandosi *esclusivamente su geometria* (no font name)
     """
 
-    def __init__(self, dpi: int = 300) -> None:
+    def __init__(
+        self,
+        dpi: int = 300,
+        ocr_fallback: bool = True,
+        ocr_engine: Any | None = None,
+        ocr_min_chars: int = 16,
+        ocr_min_confidence: float = 0.5,
+    ) -> None:
         self.dpi = dpi
         self.scale = dpi / 72.0  # PDF native è 72 DPI
+        # OCR fallback for text-less PDFs (CAD exports with outlined fonts): when
+        # the native text layer is empty we rasterize and OCR the page so the
+        # association stage still gets refs/labels. Optional dep ('[ocr]' extra);
+        # ocr_engine is injectable for testing.
+        self.ocr_fallback = ocr_fallback
+        self.ocr_engine = ocr_engine
+        self.ocr_min_chars = ocr_min_chars
+        self.ocr_min_confidence = ocr_min_confidence
 
     def extract(self, pdf_path: Path | str) -> list[ExtractedPage]:
         """Estrae tutte le pagine del PDF."""
@@ -295,10 +310,42 @@ class VectorExtractor:
         # 2. Testo: merge reale degli span via get_text("dict") (fix B3)
         result.text_blocks = self._extract_text_blocks(page)
 
+        # 2b. OCR fallback per PDF senza layer testo (font outlined / scansioni):
+        # se l'estrazione nativa è sotto soglia, rasterizza e fai OCR (box incluse).
+        if self.ocr_fallback:
+            result.text_blocks = self._maybe_ocr(page, result.text_blocks)
+
         # 3. Post-processing: merge segmenti collineari (come wire_merge)
         result.segments = self._merge_collinear_segments(result.segments)
 
         return result
+
+    def _maybe_ocr(
+        self, page: Any, text_blocks: list[PDFTextBlock]
+    ) -> list[PDFTextBlock]:
+        """Sostituisce i text block con quelli OCR se il layer testo è vuoto.
+
+        Importa il modulo OCR in modo lazy: se l'extra '[ocr]' non è installato
+        si degrada silenziosamente lasciando i (pochi/zero) blocchi nativi.
+        """
+        from .ocr_fallback import ocr_text_blocks, text_char_count
+
+        if text_char_count(text_blocks) >= self.ocr_min_chars:
+            return text_blocks
+        try:
+            ocr_blocks = ocr_text_blocks(
+                page,
+                dpi=self.dpi,
+                min_confidence=self.ocr_min_confidence,
+                ocr=self.ocr_engine,
+            )
+        except ImportError:
+            logger.warning(
+                "OCR fallback skipped: rapidocr not installed (install extra 'ocr')"
+            )
+            return text_blocks
+        logger.info("OCR fallback applied", recovered_blocks=len(ocr_blocks))
+        return ocr_blocks
 
     def _parse_drawing_item(self, item: tuple[Any, ...]) -> PDFSegment | PDFShape | None:
         """Parse di un singolo item da page.get_drawings().

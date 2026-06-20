@@ -40,6 +40,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ocr = [
+    # OCR fallback for text-less PDFs (CAD exports with outlined fonts, e.g.
+    # arduino_nano). Heavy (pulls onnxruntime + opencv) so kept optional and
+    # imported lazily — the core extraction pipeline stays lightweight.
+    "rapidocr-onnxruntime>=1.3.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
