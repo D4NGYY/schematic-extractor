@@ -22,7 +22,8 @@ def query_cmd(
     question: str = typer.Argument(..., help="La domanda in linguaggio naturale"),
     pdf: Path = typer.Option(..., "--pdf", help="Percorso al file PDF dello schema"),
     mock: bool = typer.Option(False, "--mock", help="Usa il MockClient invece di Ollama"),
-    model: str = typer.Option("llama3.1:8b-instruct-q4_K_M", "--model", help="Modello Ollama da utilizzare")
+    model: str = typer.Option("qwen2.5:7b-instruct-q4_K_M", "--model", help="Modello Ollama da utilizzare"),
+    verbose: bool = typer.Option(False, "--verbose", help="Stampa l'output di log dettagliato")
 ) -> None:
     """
     Interroga il grafo bipartito (Componenti <-> Nets) estratto da un PDF tramite un LLM.

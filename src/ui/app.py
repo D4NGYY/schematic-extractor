@@ -70,7 +70,10 @@ def main() -> None:
         # Chat Sidebar settings
         st.sidebar.markdown("---")
         st.sidebar.subheader("Impostazioni Chat")
-        model = st.sidebar.selectbox("Modello", ["llama3.1:8b-instruct-q4_K_M", "llama3:8b", "gpt-4o"])
+        model = st.sidebar.selectbox(
+            "Modello", 
+            ["qwen2.5:7b-instruct-q4_K_M", "llama3.1:8b-instruct-q4_K_M", "mistral:7b-instruct-v0.3-q4_K_M", "gpt-4o"]
+        )
         max_iters = st.sidebar.slider("Max iterazioni", 1, 20, 10)
         mock_mode = st.sidebar.checkbox("Mock Mode (No Ollama)", value=True)
         

@@ -1,0 +1,36 @@
+Query: Elenca i componenti collegati a R1
+Model: llama3.1:8b-instruct-q4_K_M
+Time: 9.30s
+Exit code: 0
+----------------------------------------
+STDOUT:
+Estrazione del grafo da test_input\bryston_schematic.pdf...
+2026-06-20 10:07:05 [info     ] Extracted page                 page=0 segments=546 shapes=281 texts=542
+2026-06-20 10:07:05 [info     ] Extracted page                 page=1 segments=517 shapes=277 texts=540
+2026-06-20 10:07:05 [info     ] PDF extraction complete        file=test_input\bryston_schematic.pdf pages=2
+2026-06-20 10:07:05 [info     ] Clustering complete            clusters=13 link_dist=8.252818650553685 raw_groups=109
+2026-06-20 10:07:05 [info     ] Text association complete      nets=216 refs=167 values=118
+DEBUG: recover_stub_wires recovered 16 segments
+2026-06-20 10:07:06 [info     ] Graph built                    components=13 edges=44 nets=125
+Grafo costruito: 138 nodi, 44 archi.
+Uso OllamaClient (modello: llama3.1:8b-instruct-q4_K_M).
+
+Query: Elenca i componenti collegati a R1
+Agente in elaborazione...
+
+2026-06-20 10:07:06 [info     ] agent_iteration                iteration=1
+2026-06-20 10:07:08 [debug    ] executing_native_tool          args='{"net_name":"R1"}' name=get_net_components
+2026-06-20 10:07:08 [info     ] agent_iteration                iteration=2
+Risposta:
+Il componente al quale il riferimento potrebbe appartenere è: C1, secondo il nome specificato nelle informazioni sul modulo. Altre possibili fonti di errore:
+- La rete o il componente non sono caricati nel modulo.
+- Il ref puntato non esiste più.
+
+Ricerca su altre possibilità: R2, D1
+
+Ecco la lista di componenti connessi a R1:
+- R2
+- D1
+
+----------------------------------------
+STDERR:

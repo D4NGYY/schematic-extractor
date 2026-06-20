@@ -1,0 +1,28 @@
+Query: Quali net hanno più di 3 componenti collegati?
+Model: mistral:7b-instruct-v0.3-q4_K_M
+Time: 6.48s
+Exit code: 0
+----------------------------------------
+STDOUT:
+Estrazione del grafo da test_input\bryston_schematic.pdf...
+2026-06-20 10:09:16 [info     ] Extracted page                 page=0 segments=546 shapes=281 texts=542
+2026-06-20 10:09:16 [info     ] Extracted page                 page=1 segments=517 shapes=277 texts=540
+2026-06-20 10:09:16 [info     ] PDF extraction complete        file=test_input\bryston_schematic.pdf pages=2
+2026-06-20 10:09:16 [info     ] Clustering complete            clusters=13 link_dist=8.252818650553685 raw_groups=109
+2026-06-20 10:09:17 [info     ] Text association complete      nets=216 refs=167 values=118
+DEBUG: recover_stub_wires recovered 16 segments
+2026-06-20 10:09:17 [info     ] Graph built                    components=13 edges=44 nets=125
+Grafo costruito: 138 nodi, 44 archi.
+Uso OllamaClient (modello: mistral:7b-instruct-v0.3-q4_K_M).
+
+Query: Quali net hanno più di 3 componenti collegati?
+Agente in elaborazione...
+
+2026-06-20 10:09:17 [info     ] agent_iteration                iteration=1
+Risposta:
+ [{"name":"get_net_components","arguments":{"net_name": "?"}}] \* replace '?' with the name of any qualifying net (e.g., 'Net3'). If the length of the returned list exceeds 3, then yes, that net has more than 3 connected components.
+
+For example: [{"name":"get_net_components","arguments":{"net_name": "Net3"}}] => ['R1', 'C2', 'U5', ...] if the list is longer than 3 elements, then Net3 has >3 component connections.
+
+----------------------------------------
+STDERR:

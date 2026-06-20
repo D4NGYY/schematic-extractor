@@ -1,0 +1,52 @@
+Query: Quali net hanno più di 3 componenti collegati?
+Model: qwen2.5:7b-instruct-q4_K_M
+Time: 21.33s
+Exit code: 0
+----------------------------------------
+STDOUT:
+Estrazione del grafo da test_input\bryston_schematic.pdf...
+2026-06-20 10:08:10 [info     ] Extracted page                 page=0 segments=546 shapes=281 texts=542
+2026-06-20 10:08:11 [info     ] Extracted page                 page=1 segments=517 shapes=277 texts=540
+2026-06-20 10:08:11 [info     ] PDF extraction complete        file=test_input\bryston_schematic.pdf pages=2
+2026-06-20 10:08:11 [info     ] Clustering complete            clusters=13 link_dist=8.252818650553685 raw_groups=109
+2026-06-20 10:08:11 [info     ] Text association complete      nets=216 refs=167 values=118
+DEBUG: recover_stub_wires recovered 16 segments
+2026-06-20 10:08:11 [info     ] Graph built                    components=13 edges=44 nets=125
+Grafo costruito: 138 nodi, 44 archi.
+Uso OllamaClient (modello: qwen2.5:7b-instruct-q4_K_M).
+
+Query: Quali net hanno più di 3 componenti collegati?
+Agente in elaborazione...
+
+2026-06-20 10:08:11 [info     ] agent_iteration                iteration=1
+2026-06-20 10:08:14 [debug    ] executing_native_tool          args='{"net_name":"GND"}' name=get_net_components
+2026-06-20 10:08:14 [info     ] agent_iteration                iteration=2
+2026-06-20 10:08:16 [debug    ] executing_native_tool          args='{"net_name":"VCC"}' name=get_net_components
+2026-06-20 10:08:16 [info     ] agent_iteration                iteration=3
+2026-06-20 10:08:17 [debug    ] executing_native_tool          args='{"net_name":"NC"}' name=get_net_components
+2026-06-20 10:08:17 [info     ] agent_iteration                iteration=4
+2026-06-20 10:08:19 [debug    ] executing_native_tool          args='{"component_ref":"R1"}' name=get_component_info
+2026-06-20 10:08:19 [info     ] agent_iteration                iteration=5
+2026-06-20 10:08:21 [debug    ] executing_native_tool          args='{"net_name":"Net1"}' name=get_net_components
+2026-06-20 10:08:21 [info     ] agent_iteration                iteration=6
+2026-06-20 10:08:24 [debug    ] executing_native_tool          args='{"net_name":"Net3"}' name=get_net_components
+2026-06-20 10:08:24 [debug    ] executing_native_tool          args='{"net_name":"Net4"}' name=get_net_components
+2026-06-20 10:08:24 [debug    ] executing_native_tool          args='{"net_name":"Net5"}' name=get_net_components
+2026-06-20 10:08:24 [info     ] agent_iteration                iteration=7
+2026-06-20 10:08:26 [debug    ] executing_native_tool          args={} name=find_isolated
+2026-06-20 10:08:26 [info     ] agent_iteration                iteration=8
+Risposta:
+The response indicates that there are no isolated components in the schematic, which suggests all components are connected to nets. However, since none of the standard or generic nets have been found and there are no isolated components, it further supports the possibility that the schematic is quite simple with only a few or no nets having more than three connected components.
+
+Given this information, we can conclude that:
+
+- There are no known nets like 'GND', 'VCC', 'NC', or similar standard names.
+- No common net references were found during our search.
+- The `isolated_components` check did not return any results, meaning all components are part of some network.
+
+Therefore, based on the data available from the functions we have tried, it appears that there are no nets with more than three connected components in this particular schematic.
+
+If you need to verify or if we should test other components or nets manually, please provide further details or net names for us to check.
+
+----------------------------------------
+STDERR:

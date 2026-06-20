@@ -1,0 +1,30 @@
+Query: Trova path da R1 a U1
+Model: mistral:7b-instruct-v0.3-q4_K_M
+Time: 8.06s
+Exit code: 0
+----------------------------------------
+STDOUT:
+Estrazione del grafo da test_input\bryston_schematic.pdf...
+2026-06-20 10:09:01 [info     ] Extracted page                 page=0 segments=546 shapes=281 texts=542
+2026-06-20 10:09:02 [info     ] Extracted page                 page=1 segments=517 shapes=277 texts=540
+2026-06-20 10:09:02 [info     ] PDF extraction complete        file=test_input\bryston_schematic.pdf pages=2
+2026-06-20 10:09:02 [info     ] Clustering complete            clusters=13 link_dist=8.252818650553685 raw_groups=109
+2026-06-20 10:09:02 [info     ] Text association complete      nets=216 refs=167 values=118
+DEBUG: recover_stub_wires recovered 16 segments
+2026-06-20 10:09:02 [info     ] Graph built                    components=13 edges=44 nets=125
+Grafo costruito: 138 nodi, 44 archi.
+Uso OllamaClient (modello: mistral:7b-instruct-v0.3-q4_K_M).
+
+Query: Trova path da R1 a U1
+Agente in elaborazione...
+
+2026-06-20 10:09:02 [info     ] agent_iteration                iteration=1
+2026-06-20 10:09:04 [debug    ] executing_react_tool           args="'R1','U1'" name=get_path
+2026-06-20 10:09:04 [info     ] agent_iteration                iteration=2
+2026-06-20 10:09:05 [debug    ] executing_react_tool           args='{"component_ref": "R1"}' name=get_neighbors
+2026-06-20 10:09:05 [info     ] agent_iteration                iteration=3
+Risposta:
+ The given observational result suggests that component 'R1' does not exist in the current schematic.
+
+----------------------------------------
+STDERR:
