@@ -79,3 +79,31 @@ def test_endpoint_or_pad_captures_stub() -> None:
     comps = DetectorComponentSource(dpi=72, box_pad_pt=0.0).components(dets, _page([stub]))
     assert len(comps) == 1
     assert stub in comps[0].cluster.segments
+
+
+class _StubAssoc:
+    """Stub TextAssociator returning a fixed ref list (for hybrid-gate tests)."""
+
+    def __init__(self, ref_texts: list[str]) -> None:
+        self._refs = [
+            SymbolAssociation(t, "ref", (5, 5), (0, 0, 10, 10), (5, 5), 1.0, 1.0)
+            for t in ref_texts
+        ]
+
+    def associate(self, page):  # type: ignore[no-untyped-def]
+        return self._refs, [], []
+
+
+def test_hybrid_falls_back_when_detector_sparse() -> None:
+    # 4 refs on the page, detector finds 0 boxes -> below min_frac -> None (fallback).
+    page = _page([PDFSegment(start=(5, 5), end=(15, 5), item_type="line")])
+    src = DetectorComponentSource(dpi=72, text_associator=_StubAssoc(["R1", "R2", "R3", "R4"]))
+    assert src.components_or_fallback([], page, min_frac=0.5) is None
+
+
+def test_hybrid_uses_detector_when_coverage_ok() -> None:
+    page = _page([PDFSegment(start=(5, 5), end=(15, 5), item_type="line")])
+    src = DetectorComponentSource(dpi=72, text_associator=_StubAssoc(["R1", "R2"]))
+    dets = [Detection(class_name="resistor", bbox_px=(0, 0, 20, 20))]
+    out = src.components_or_fallback(dets, page, min_frac=0.5)  # 1 comp / 2 refs = 0.5 ok
+    assert out is not None and len(out) == 1

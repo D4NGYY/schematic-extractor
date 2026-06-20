@@ -125,6 +125,28 @@ class DetectorComponentSource:
             )
         return out
 
+    def components_or_fallback(
+        self,
+        detections: list[Detection],
+        page: ExtractedPage,
+        min_frac: float = 0.5,
+    ) -> list[ComponentNode] | None:
+        """Hybrid gate: return detector components only if the detector found at
+        least `min_frac` of the page's ref-designators; otherwise return None so
+        the caller falls back to the geometric pipeline.
+
+        Rationale (measured): the detector wins big on some boards but on others
+        (small / under-represented) finds nothing and REGRESSES vs geometric
+        (e.g. pic_sockets geo 0.625 -> det 0.0). Falling back keeps the wins
+        without the crashes. min_frac=0.5 -> need to cover half the visible refs.
+        """
+        comps = self.components(detections, page)
+        refs, _v, _l = self.text_associator.associate(page)
+        n_ref = len({r.text for r in refs})
+        if n_ref and len(comps) < min_frac * n_ref:
+            return None
+        return comps
+
     @staticmethod
     def _pick_ref(refs, box, used_refs):  # type: ignore[no-untyped-def]
         """Nearest unused ref whose anchor is inside the box (else None)."""

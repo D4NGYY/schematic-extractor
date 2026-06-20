@@ -31,6 +31,14 @@ from src.ml.detector_source import Detection, DetectorComponentSource
 BASE = Path("test_input/multi_schematic")
 
 
+def is_container(sch: Path, num_gt: int) -> bool:
+    """A hierarchical ROOT whose sub-sheets are scored as their own boards (e.g.
+    `video` -> muxdata/pal-ntsc/...). It has sheet refs but few own components;
+    scoring it double-counts other boards. Excluded from the aggregate."""
+    txt = sch.read_text(errors="ignore")
+    return txt.count("Sheetfile") > 0 and num_gt <= 5
+
+
 def _f1(ext_cn: dict, gt_cn: dict, common: set) -> float:
     enr: dict = defaultdict(set)
     gnr: dict = defaultdict(set)
@@ -80,7 +88,7 @@ def _membership(b: BipartiteGraphBuilder, pi: int) -> dict:
     return out
 
 
-def score(pdf: Path, sch: Path, model, dpi: float, src: DetectorComponentSource):
+def score(pdf, sch, model, dpi, src, hybrid=False, min_frac=0.5):  # type: ignore[no-untyped-def]
     pages = VectorExtractor().extract(str(pdf))
     gt = build_gt_graph(parse_kicad_sch(sch))
     gt_cn: dict = defaultdict(set)
@@ -103,7 +111,12 @@ def score(pdf: Path, sch: Path, model, dpi: float, src: DetectorComponentSource)
                         strict=False,
                     )
                 ]
-                b.build_from_page(page, detector_components=src.components(dets, page))
+                comps = (
+                    src.components_or_fallback(dets, page, min_frac)
+                    if hybrid
+                    else src.components(dets, page)
+                )
+                b.build_from_page(page, detector_components=comps)
             else:
                 b.build_from_page(page)
             for ref, nets in _membership(b, pi).items():
@@ -134,6 +147,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights", required=True)
     ap.add_argument("--dpi", type=float, default=150.0)
+    ap.add_argument("--hybrid", action="store_true",
+                    help="fall back to geometric when the detector is sparse")
+    ap.add_argument("--min-frac", type=float, default=0.5)
+    ap.add_argument("--keep-containers", action="store_true",
+                    help="do NOT exclude hierarchical container roots")
     ap.add_argument("boards", nargs="*")
     args = ap.parse_args()
     from ultralytics import YOLO  # noqa: PLC0415
@@ -148,18 +166,24 @@ def main() -> None:
     for n in names:
         d = BASE / n
         try:
-            r = score(next(d.glob("*.pdf")), next(d.glob("*.kicad_sch")), model, args.dpi, src)
+            sch_p = next(d.glob("*.kicad_sch"))
+            r = score(next(d.glob("*.pdf")), sch_p, model, args.dpi, src,
+                      hybrid=args.hybrid, min_frac=args.min_frac)
+            if not args.keep_containers and "num_gt" in r and is_container(sch_p, r["num_gt"]):
+                r["container"] = True
         except Exception as e:  # noqa: BLE001
             r = {"error": str(e)[:50]}
         rows.append((n, r))
         if "error" in r:
             print(f"{n:28s} ERROR {r['error']}")
+        elif r.get("container"):
+            print(f"{n:28s} CONTAINER (excluded; sub-sheets scored separately)")
         else:
             d_ = r["det_f1"] - r["geo_f1"]
             flag = "  <== DET WORSE" if d_ < -0.02 else ("  <== DET BETTER" if d_ > 0.02 else "")
             print(f"{n:28s} geo={r['geo_f1']:.3f} det={r['det_f1']:.3f} "
                   f"d={d_:+.3f} (gt={r['num_gt']},pg={r['pages']}){flag}")
-    real = [r for _, r in rows if "geo_f1" in r and r["num_gt"] > 0]
+    real = [r for _, r in rows if "geo_f1" in r and r["num_gt"] > 0 and not r.get("container")]
     if real:
         g = sum(r["geo_f1"] for r in real) / len(real)
         de = sum(r["det_f1"] for r in real) / len(real)
