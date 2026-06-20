@@ -276,3 +276,19 @@ Followed up the §19/§20 wire-lever: does filtering *which* axis-aligned orphan
 - min+conn combined: 0.566.
 **Conclusion:** every filter REGRESSES the mean. The orphans a filter would drop carry real connectivity; the dominant loss is *missing* wires (oracle §19), so permissive reclamation is correct. **The shipped behavior is already optimal — do not add an orphan filter.** Knobs kept (default off) as a documented extension point + 3 unit tests. 215 tests green, ruff clean. (mypy: in-sandbox it hits a numpy-typing INTERNAL ERROR on clustering.py — env-only, version-specific; runs clean on Windows. Re-run mypy there.)
 - _Next clean wire headroom is NOT in reclamation tuning_ — it is upstream de-fragmentation (separate_wires threshold was Attempt 1, measured-dead/Bryston-regressing) or the ref→cluster collision (§3, component recall). See the §0 strategic note: the cheap spike to try next is **Voronoi-by-ref segment split** (use extracted ref anchors to split a fused cluster's *segments* per nearest ref) before the big clustering rewrite.
+
+## 22. Symbol-less / collided-ref recovery (2026-06-20, commit `c6e4a00`) — recall lever, MEASURED-DEAD for net-F1
+Goal shifted from "publish" to **"make it actually work"** → attacked the dominant recall sink: refs that lose the ref→cluster collision (overlap 14/48 on micro). Feasibility check: on arduino_micro 18 lost refs, **14/18 are clean 2-terminal parts (GTdeg 2) and 17/18 sit next to wire endpoints** — i.e. real fused components, recoverable without ML.
+Shipped opt-in `recover_lost_refs` (default OFF): instantiate each lost ref at its anchor as a *clusterless* component, synthesise pins at the nearest distinct wire stubs (pin count **capped per class** via `_EXPECTED_PINS`; skip refs inside an existing bbox = sub-labels; skip non-name-classifiable labels = connector pins). `_connect_pins_to_nets` handles clusterless comps.
+**Measured on 8 GT boards + Bryston:**
+- Recovery **DOUBLES component recall**: arduino_micro overlap **14→30**, ampli_ht **12→24**, pal-ntsc 16→27, pspice 11→16.
+- But net-topology **F1 does NOT improve**: baseline **0.586** vs naive recover 0.558 / +pincap+bbox 0.568 / +pincap-only 0.559. Precision falls ∝ recall gain because synthesised pins guess the wrong net often enough.
+- bbox guard fixes Bryston over-generation (80→1 recoveries, c=14/deg=6 healthy) but on under-segmented boards it blocks the *real* recoveries (the lost parts sit INSIDE the fused cluster bbox — that's why they collided). The two regimes pull opposite ways.
+**Verdict:** same wall as §3 split experiments and the §19 oracle — **you cannot lift net-F1 by adding components without TRUE pin geometry.** Kept `recover_lost_refs` as a documented opt-in because it is **strictly better for component ENUMERATION** (the LLM "list/which components" queries), just not for net precision. +5 tests, 220 green, ruff clean.
+
+### THE convergent conclusion (after wire-lever + orphan-filter + ref-recovery all measured-dead)
+Every remaining *geometric heuristic* lever is now exhausted and independently measured-dead:
+1. wire de-frag (separate_wires threshold) — §19 Attempt 1, reverted.
+2. orphan reclamation filter — §21, reclaim-all already optimal.
+3. collided-ref recovery — §22, recall up but net-F1 flat.
+And the oracle (§19) proved the net-tracing **algorithm is not the bottleneck** (pure_gt ~0.73–1.0). **The single remaining lever with real headroom is a component/symbol DETECTOR that provides TRUE pin positions** (then `recover_lost_refs`-style instantiation works with correct pins instead of wire-guessed ones). GT for it is free from KiCad (no manual labeling) — this is the "B1 ML upgrade" / item 3. That is the honest next step for "make it really work"; further geometric tuning will not move the metric.
