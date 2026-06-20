@@ -1,6 +1,6 @@
 {
   "num_ext": 112,
-  "num_gt": 94,
+  "num_gt": 48,
   "overlap_refs": 24,
   "f1_old": 0.0,
   "f1_new": 0.20915032679738563,
