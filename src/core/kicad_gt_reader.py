@@ -118,6 +118,35 @@ def parse_kicad_sch(path: Path | str) -> KicadSchematic:
 
     sch = KicadSchematic()
 
+    # 1. Parse lib_symbols to extract pin positions relative to symbol origin
+    lib_symbols_node = _find_first(ast, "lib_symbols")
+    lib_pins = {} # lib_id -> list of (pin_num, x, y, rot)
+    if lib_symbols_node:
+        for sym in _find_all(lib_symbols_node, "symbol"):
+            if len(sym) < 2:
+                continue
+            lib_id = sym[1]
+            pins = []
+            
+            def extract_pins_recursive(node):
+                for child in node:
+                    if isinstance(child, list) and child:
+                        if child[0] == "pin":
+                            at_node = _find_first(child, "at")
+                            num_node = _find_first(child, "number")
+                            if at_node and num_node:
+                                px = float(at_node[1])
+                                py = float(at_node[2])
+                                rot = float(at_node[3]) if len(at_node) > 3 else 0.0
+                                pin_num = str(num_node[1])
+                                pins.append((pin_num, px, py, rot))
+                        elif child[0] == "symbol":
+                            extract_pins_recursive(child)
+                            
+            extract_pins_recursive(sym)
+            if pins:
+                lib_pins[lib_id] = pins
+
     # Extract wires
     for w in _find_all(ast, "wire"):
         pts_node = _find_first(w, "pts")
@@ -152,12 +181,22 @@ def parse_kicad_sch(path: Path | str) -> KicadSchematic:
                 )
 
     # Extract symbols
+    import math
     for sym in _find_all(ast, "symbol"):
         lib_id_node = _find_first(sym, "lib_id")
         at_node = _find_first(sym, "at")
+        mirror_node = _find_first(sym, "mirror")
+        
         lib_id = lib_id_node[1] if lib_id_node else ""
         x = float(at_node[1]) if at_node else 0.0
         y = float(at_node[2]) if at_node else 0.0
+        rot = float(at_node[3]) if (at_node and len(at_node) > 3) else 0.0
+        
+        mirror_x = False
+        mirror_y = False
+        if mirror_node and len(mirror_node) > 1:
+            if mirror_node[1] == "x": mirror_x = True
+            if mirror_node[1] == "y": mirror_y = True
 
         ref = ""
         for prop in _find_all(sym, "property"):
@@ -167,15 +206,34 @@ def parse_kicad_sch(path: Path | str) -> KicadSchematic:
 
         symbol = KicadSymbol(ref=ref, lib_id=lib_id, x=x, y=y)
 
-        # Extract pins (note: real kicad 6+ embedded symbols store pins in lib_symbols
-        # but for synthetic tests, we might just look if they are inline or simplify.
-        # The prompt asks to extract `(pin (at x y) ...)` so we look for them in symbol.
+        # Extract pins
+        inline_pins = False
         for pin in _find_all(sym, "pin"):
             pin_num = pin[1]
             p_at = _find_first(pin, "at")
             if p_at:
+                inline_pins = True
                 px, py = float(p_at[1]), float(p_at[2])
                 symbol.pins.append(KicadPin(ref=ref, pin_num=pin_num, x=px, y=py))
+                
+        # If no inline pins, look up lib_pins and transform
+        if not inline_pins and lib_id in lib_pins:
+            angle_rad = math.radians(rot)
+            cos_a = math.cos(angle_rad)
+            sin_a = math.sin(angle_rad)
+            
+            for pin_num, px, py, prot in lib_pins[lib_id]:
+                # 1. Mirror
+                mx = -px if mirror_x else px
+                my = -py if mirror_y else py
+                # 2. Rotate (KiCad Y axis is down)
+                rx = mx * cos_a - my * sin_a
+                ry = mx * sin_a + my * cos_a
+                # 3. Translate
+                abs_x = x + rx
+                abs_y = y + ry
+                symbol.pins.append(KicadPin(ref=ref, pin_num=pin_num, x=abs_x, y=abs_y))
+
         sch.symbols.append(symbol)
 
     return sch

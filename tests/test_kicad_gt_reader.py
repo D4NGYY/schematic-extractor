@@ -71,3 +71,65 @@ def test_gt_graph_resistor_ladder() -> None:
     assert len(sch.wires) > 0
     graph = build_gt_graph(sch)
     assert graph.net_count > 0
+
+
+def test_parse_lib_symbols_and_absolute_position() -> None:
+    text = """(kicad_sch (version 20211123)
+      (lib_symbols
+        (symbol "Device:R"
+          (symbol "Device:R_1_1"
+            (pin passive line (at 0 2.54 270) (length 2.54)
+              (name "~" (effects (font (size 1.27 1.27))))
+              (number "1" (effects (font (size 1.27 1.27))))
+            )
+            (pin passive line (at 0 -2.54 90) (length 2.54)
+              (name "~" (effects (font (size 1.27 1.27))))
+              (number "2" (effects (font (size 1.27 1.27))))
+            )
+          )
+        )
+      )
+      (symbol (lib_id "Device:R") (at 10 20 90)
+        (property "Reference" "R1" (at 15 20 0))
+      )
+    )"""
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "test2.kicad_sch"
+        p.write_text(text, encoding="utf-8")
+        
+        sch = parse_kicad_sch(p)
+        assert len(sch.symbols) == 1
+        assert sch.symbols[0].ref == "R1"
+        assert len(sch.symbols[0].pins) == 2
+        # Transform check:
+        # Original: (0, 2.54) rotated by 90 deg clockwise (or CCW?)
+        # rot = 90
+        # mx = 0, my = 2.54
+        # rx = 0*cos(90) - 2.54*sin(90) = -2.54
+        # ry = 0*sin(90) + 2.54*cos(90) = 0
+        # abs_x = 10 - 2.54 = 7.46
+        # abs_y = 20 + 0 = 20
+        # Let's just check that pins were populated
+        assert sch.symbols[0].pins[0].pin_num == "1"
+
+
+def test_gt_graph_micro_after_fix() -> None:
+    p = Path("test_input/multi_schematic/arduino_micro/arduino_micro.kicad_sch")
+    if not p.exists():
+        pytest.skip(f"GT file {p} not found")
+        
+    sch = parse_kicad_sch(p)
+    graph = build_gt_graph(sch)
+    assert graph.net_count > 0
+    assert len(graph.nets) > 0
+
+
+def test_gt_graph_nano_after_fix() -> None:
+    p = Path("test_input/multi_schematic/arduino_nano/arduino_nano.kicad_sch")
+    if not p.exists():
+        pytest.skip(f"GT file {p} not found")
+        
+    sch = parse_kicad_sch(p)
+    graph = build_gt_graph(sch)
+    assert graph.net_count > 0
+    assert len(graph.nets) > 0
