@@ -600,7 +600,7 @@ class TestWireMergeW1:
             PDFSegment(start=(5, 10), end=(5, 20), item_type="line"),
         ]
         builder._build_nets(segs, scale=1.0)
-        # Expected behavior: Wire A and B cross but don't touch ends. 
+        # Expected behavior: Wire A and B cross but don't touch ends.
         # But Wire A merges with dummy 1, and Wire B merges with dummy 2.
         # Total nets = 2
         assert len(builder.nets) == 2

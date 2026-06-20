@@ -6,14 +6,10 @@ from pathlib import Path
 import pytest
 
 from src.core.kicad_gt_reader import (
-    KicadJunction,
-    KicadLabel,
-    KicadSymbol,
-    KicadWire,
     build_gt_graph,
     parse_kicad_sch,
-    tokenize_sexpr,
     parse_sexpr,
+    tokenize_sexpr,
 )
 
 
@@ -36,7 +32,7 @@ def test_parse_simple_resistor() -> None:
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "test.kicad_sch"
         p.write_text(text, encoding="utf-8")
-        
+
         sch = parse_kicad_sch(p)
         assert len(sch.symbols) == 1
         assert sch.symbols[0].ref == "R1"
@@ -50,12 +46,12 @@ def test_gt_graph_bridge_rectifier() -> None:
     p = Path("data/kicad/synthetic/bridge_rectifier.kicad_sch")
     if not p.exists():
         pytest.skip(f"GT file {p} not found")
-        
+
     sch = parse_kicad_sch(p)
     assert len(sch.wires) == 6
     assert len(sch.junctions) == 1
     assert len(sch.labels) == 3
-    
+
     graph = build_gt_graph(sch)
     # The file has 3 global labels: AC_IN, VCC, GND, and 6 wires.
     # We expect some nets to be formed and named after labels.
@@ -66,7 +62,7 @@ def test_gt_graph_resistor_ladder() -> None:
     p = Path("data/kicad/synthetic/resistor_ladder_3.kicad_sch")
     if not p.exists():
         pytest.skip(f"GT file {p} not found")
-        
+
     sch = parse_kicad_sch(p)
     assert len(sch.wires) > 0
     graph = build_gt_graph(sch)
@@ -96,7 +92,7 @@ def test_parse_lib_symbols_and_absolute_position() -> None:
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "test2.kicad_sch"
         p.write_text(text, encoding="utf-8")
-        
+
         sch = parse_kicad_sch(p)
         assert len(sch.symbols) == 1
         assert sch.symbols[0].ref == "R1"
@@ -117,7 +113,7 @@ def test_gt_graph_micro_after_fix() -> None:
     p = Path("test_input/multi_schematic/arduino_micro/arduino_micro.kicad_sch")
     if not p.exists():
         pytest.skip(f"GT file {p} not found")
-        
+
     sch = parse_kicad_sch(p)
     graph = build_gt_graph(sch)
     assert graph.net_count > 0
@@ -128,7 +124,7 @@ def test_gt_graph_nano_after_fix() -> None:
     p = Path("test_input/multi_schematic/arduino_nano/arduino_nano.kicad_sch")
     if not p.exists():
         pytest.skip(f"GT file {p} not found")
-        
+
     sch = parse_kicad_sch(p)
     graph = build_gt_graph(sch)
     assert graph.net_count > 0
