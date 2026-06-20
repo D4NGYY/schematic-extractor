@@ -1,6 +1,6 @@
 # TODO — schematic_extractor
 
-**Updated:** 2026-06-19 (wire/symbol separation) · Source of truth for what's next. Work top-down within each priority block.
+**Updated:** 2026-06-20 (Phase 5 LLM done; net-connectivity re-diagnosed) · Source of truth for what's next. Work top-down within each priority block.
 
 **Legend:** `[ ]` open · `[~]` in progress · `[x]` done · severity 🔴 blocker / 🟡 should-fix / 🟢 nice-to-have
 
@@ -31,11 +31,17 @@
 
 ## P4 — Phases 4–6 (after P1–P3)
 
-- [~] 🔴 **D3 — connectivity (visual-first).** Investigato (HANDOFF §3a): net layer affamato (20 fili; terminali ~45pt dal filo), causa a monte = `separate_wires` scarta 25 fili corti nei simboli; pin = free-endpoint (36/51 cluster -> 2-6 terminali); relazione pin↔filo NON leggibile da metriche cieche. Step: (a) overlay pin+fili, (b) diagnosi visiva, (c) fix separate_wires + pin free-endpoint + connessione punto-segmento con tol osservata.
+- [~] 🔴 **Net-connectivity (visual-first).** _Aggiornato 2026-06-20 con misure su F1 GT (arduino_micro/nano)._
+  - **GT honesty (DONE, commit 041502f):** `build_gt_graph` escludeva `#PWR`/`#FLG` (power port) dai componenti → ~70/94 falsi negativi incancellabili. Ora esclusi. `num_gt` micro 94→48, nano 71→34.
+  - **Baseline F1 (post-fix):** micro f1_new=0.21 (overlap 24/48), nano f1_new=0.00 (overlap **3/34**). Il metric è gated sui common_refs e guidato da `fn` (connettività net).
+  - **Causa radice misurata:** pin connection **16%** (98/612), net degree max **2** (la GND reale GT tocca 17 pin). Le net estratte sono schegge.
+  - **Smentito per esperimento:** abbassare la soglia di `separate_wires` (factor 3→1) **non** aumenta `netmaxdeg` (resta 2) e **peggiora** Bryston (comps 13→9, blob). Quindi `separate_wires` NON è la leva.
+  - **Diagnosi:** problema multi-fattore = (a) completezza estrazione fili nel PDF, (b) pin **sovra-generati** (`select_pins` ritorna free-endpoint interni ai simboli, non terminali reali: 612 pin per ~110 comp), (c) reach BFS. Da attaccare con l'**overlay visiva** (pin+fili) prima di toccare codice delicato.
+  - **2° leva indipendente:** ref-recovery (overlap nano 3/34) — l'estrattore non recupera i designator (text_associator); è il tetto della recall.
 
 - [x] 🟡 **Phase 4 — ERC** (`src/core/erc.py`): ISOLATED_COMPONENT, FLOATING_PIN, DANGLING_NET, UNCONNECTED_NET, UNNAMED_NET. 16 test. Bryston: 31 err + 1 warn (stub matching debole → D6 prioritario).
-- [ ] 🟡 **Phase 5 — LLM tool calling** (`src/core/llm_tools.py`) + 20-question topology benchmark.
-- [ ] 🟢 **Phase 6 — Streamlit UI** (`src/ui/app.py`): 300 DPI PNG render + SVG overlay + selectbox; then portfolio polish.
+- [x] 🔴 **Phase 5 — LLM tool calling** (`src/llm/tools.py`, `src/llm/agent.py`, `src/cli/query.py`). 7 tools, dual-mode parsing, Ollama. **Debugged end-to-end (2026-06-20):** fixed broken GraphContext schema, 2 crash bugs, hardened ReAct parser. Scored benchmark → qwen2.5:7b 25/25 (5/5). See `TEST_MANUAL.md`.
+- [~] 🟢 **Phase 6 — Streamlit UI** (`src/ui/app.py`): debug overlay + chat tab done; portfolio polish + SVG overlay pending.
 
 ## P5 — Hygiene / cleanup
 

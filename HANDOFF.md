@@ -40,7 +40,7 @@ Open-source / career-capital track. Ground truth is **auto-derived from KiCad fi
 - **Resolved — T-junction/Dot-junction (V5/V6):** wires at T-/dot-junctions merge into degree-3+ nets.
 - **Resolved — over-segmentation (V7):** `_text_guided_merge` uses ref-designator texts as gravity wells (Arduino Micro 193→112 components, F1 0.08→0.21).
 - **Resolved — LLM tool layer broken on real graphs (this session, §15):** `GraphContext` was reading the wrong node/edge schema; fixed + re-benchmarked.
-- **Open bottleneck:** D3 real pin positions (still 4 bbox-corner virtual pins) → low connectivity (many isolated). This is the next highest-leverage move.
+- **Open bottleneck — net connectivity (re-diagnosed 2026-06-20, measured on GT):** NOT "4 bbox-corner virtual pins" (stale — `select_pins` already uses symbol free-endpoints). Real issue: extracted nets are shattered (arduino_micro pin-connection 16%, max net degree 2 vs GT nets of degree 17). **Disproven by experiment:** lowering `separate_wires` threshold does not raise connectivity and worsens the Bryston blob. Multi-factor: wire-extraction completeness + pin over-generation (`select_pins` returns symbol-internal free-endpoints, not real terminals) + BFS reach. Needs the **visual overlay** (pin+wire) to fix, not blind tolerance tuning. Second independent lever: ref-recovery (`text_associator`) — arduino_nano matches only 3/34 GT refs. See TODO P4.
 
 ---
 
