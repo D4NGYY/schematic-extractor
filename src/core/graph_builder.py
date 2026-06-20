@@ -15,6 +15,20 @@ from src.ml.clustering import ComponentCluster
 
 logger = structlog.get_logger("graph_builder")
 
+# Real terminal counts for recovered (clusterless) components, by rule-classifier
+# class. Recovered parts have no symbol body, so we cap synthesised pins here to
+# avoid fabricating extra net memberships (precision control for recover_lost_refs).
+_EXPECTED_PINS: dict[str, int] = {
+    "resistor": 2,
+    "capacitor": 2,
+    "diode": 2,
+    "inductor": 2,
+    "fuse": 2,
+    "crystal": 2,
+    "testpoint": 1,
+    "transistor": 3,
+}
+
 
 @dataclass
 class ComponentNode:
@@ -70,6 +84,9 @@ class BipartiteGraphBuilder:
         orphan_min_len_factor: float = 0.0,  # drop reclaimed orphans shorter than factor×scale (0 = no min)
         orphan_max_len_factor: float | None = None,  # drop orphans longer than factor×scale (None = no max)
         orphan_require_connection: bool = False,  # reclaim only orphans whose endpoint touches a wire/symbol
+        recover_lost_refs: bool = False,  # instantiate refs that lost the cluster collision as components
+        recover_radius_factor: float = 3.0,  # search wire stubs within factor×scale of a lost ref anchor
+        recover_max_pins: int = 4,  # cap synthesized pins per recovered component
     ) -> None:
         self.classifier = classifier or ComponentClassifier()
         self.rule_classifier = RuleBasedClassifier()  # B1: attivo finché ML non è addestrato
@@ -81,7 +98,11 @@ class BipartiteGraphBuilder:
         self.orphan_min_len_factor = orphan_min_len_factor
         self.orphan_max_len_factor = orphan_max_len_factor
         self.orphan_require_connection = orphan_require_connection
+        self.recover_lost_refs = recover_lost_refs
+        self.recover_radius_factor = recover_radius_factor
+        self.recover_max_pins = recover_max_pins
         self._reclaimed_orphans: list[Any] = []  # introspection: last reclaimed orphan wires
+        self._recovered_refs: list[str] = []  # introspection: refs recovered as synthetic components
         self.graph = nx.Graph()
         self.components: dict[str, ComponentNode] = {}
         self.nets: dict[str, NetNode] = {}
@@ -131,6 +152,14 @@ class BipartiteGraphBuilder:
             comp = self._create_component_node(cluster, ref_map, val_map)
             self.components[comp.node_id] = comp
             self.graph.add_node(comp.node_id, bipartite=0, **comp.__dict__)
+
+        # 3b. Recover refs that lost the ref->cluster collision: a distinct ref
+        # whose component body fused into a neighbouring cluster never becomes its
+        # own node (_create_component_node keeps one ref per cluster). Most are
+        # 2-terminal parts sitting next to wire stubs, so we re-instantiate them at
+        # their anchor and synthesise pins from nearby wires (no ML needed).
+        if self.recover_lost_refs:
+            self._recover_lost_refs(refs, wire_segs, scale_est)
 
         # D6: scala da wire_segs reali (o symbol_segs come fallback)
         scale = self._estimate_scale(wire_segs) if wire_segs else self._estimate_scale(symbol_segs)
@@ -342,6 +371,86 @@ class BipartiteGraphBuilder:
             self.nets[net.net_id] = net
             self.graph.add_node(net.net_id, bipartite=1, **net.__dict__)
 
+    def _anchor_in_existing_bbox(self, ax: float, ay: float) -> bool:
+        """True if (ax, ay) falls inside an existing clustered component's bbox."""
+        for comp in self.components.values():
+            if comp.bbox is None:
+                continue
+            x0, y0, x1, y1 = comp.bbox
+            if x0 <= ax <= x1 and y0 <= ay <= y1:
+                return True
+        return False
+
+    def _recover_lost_refs(
+        self,
+        refs: list[SymbolAssociation],
+        wire_segs: list[PDFSegment],
+        scale: float,
+    ) -> None:
+        """Re-instantiate ref designators that lost the ref->cluster collision.
+
+        A ref whose body fused into a neighbouring cluster is dropped by
+        `_create_component_node` (one ref kept per cluster). Measured: most such
+        lost refs are 2-terminal parts adjacent to wire stubs (HANDOFF wire/recall
+        notes). For each, place a clusterless component at its anchor with pins at
+        the nearest distinct wire endpoints; `_connect_pins_to_nets` wires them.
+        """
+        existing = set(self.components)
+        best: dict[str, SymbolAssociation] = {}
+        for r in refs:
+            if r.text in existing:
+                continue
+            if r.text not in best or r.distance < best[r.text].distance:
+                best[r.text] = r
+        if not best:
+            return
+
+        endpoints = [pt for seg in wire_segs for pt in (seg.start, seg.end)]
+        radius2 = (scale * self.recover_radius_factor) ** 2
+        dedupe2 = (scale * 0.5) ** 2
+        for text, assoc in best.items():
+            ax, ay = assoc.symbol_center
+            near = [e for e in endpoints if (e[0] - ax) ** 2 + (e[1] - ay) ** 2 <= radius2]
+            if not near:
+                continue
+            near.sort(key=lambda e: (e[0] - ax) ** 2 + (e[1] - ay) ** 2)
+            stubs: list[tuple[float, float]] = []
+            for e in near:
+                if all((e[0] - s[0]) ** 2 + (e[1] - s[1]) ** 2 > dedupe2 for s in stubs):
+                    stubs.append(e)
+                if len(stubs) >= self.recover_max_pins:
+                    break
+            if not stubs:
+                continue
+            # Skip refs whose anchor already lies inside an existing component
+            # bbox -> they are sub-labels (e.g. IC pin names), not missing parts.
+            if self._anchor_in_existing_bbox(ax, ay):
+                continue
+            try:
+                class_name, conf = self.rule_classifier.classify(text, None)
+            except AttributeError:
+                # Name not recognised -> classifier needs geometry we don't have.
+                # These are connector/pin labels (A0, IO8, ...), not real parts. Skip.
+                continue
+            # Cap synthesised pins at the class's real terminal count: a recovered
+            # resistor must get 2 pins, not 4, else it fabricates net memberships.
+            n_pins = _EXPECTED_PINS.get(class_name, self.recover_max_pins)
+            stubs = stubs[:n_pins]
+            comp = ComponentNode(
+                node_id=text,
+                ref=text,
+                class_name=class_name,
+                value=None,
+                cluster=None,
+                confidence=conf,
+                bbox=None,
+            )
+            for i, (px, py) in enumerate(stubs):
+                comp.pins.append(PinNode(pin_id=f"{text}_{i + 1}", position=(px, py)))
+            self.components[text] = comp
+            self.graph.add_node(text, bipartite=0, **comp.__dict__)
+            self._recovered_refs.append(text)
+
     def _select_orphan_wires(
         self,
         orphans: list[PDFSegment],
@@ -435,18 +544,24 @@ class BipartiteGraphBuilder:
         pin_tol = max(3.0 * wire_tol, scale * self.pin_tol_factor)
 
         for comp in self.components.values():
-            if comp.cluster is None:
-                continue
-
-            pins = self.select_pins(comp.cluster)
-            for i, (px, py) in enumerate(pins):
-                pin_node = PinNode(pin_id=f"{comp.node_id}_{i+1}", position=(px, py))
-                net_id = self._find_nearest_net(px, py, pin_tol)
-                pin_node.connected_net = net_id
-                comp.pins.append(pin_node)
-
-                if net_id:
-                    self.graph.add_edge(comp.node_id, net_id, pin_id=pin_node.pin_id)
+            if comp.cluster is not None:
+                pins = self.select_pins(comp.cluster)
+                for i, (px, py) in enumerate(pins):
+                    pin_node = PinNode(pin_id=f"{comp.node_id}_{i+1}", position=(px, py))
+                    net_id = self._find_nearest_net(px, py, pin_tol)
+                    pin_node.connected_net = net_id
+                    comp.pins.append(pin_node)
+                    if net_id:
+                        self.graph.add_edge(comp.node_id, net_id, pin_id=pin_node.pin_id)
+            else:
+                # Recovered (clusterless) component: pins are pre-placed at wire
+                # stubs near the ref anchor; just resolve their nets.
+                for pin_node in comp.pins:
+                    px, py = pin_node.position
+                    net_id = self._find_nearest_net(px, py, pin_tol)
+                    pin_node.connected_net = net_id
+                    if net_id:
+                        self.graph.add_edge(comp.node_id, net_id, pin_id=pin_node.pin_id)
 
     def _merge_nets_by_label(
         self, net_labels: list[SymbolAssociation], tol: float

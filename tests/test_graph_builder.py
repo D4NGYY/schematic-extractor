@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.core.graph_builder import BipartiteGraphBuilder
+from src.core.graph_builder import BipartiteGraphBuilder, ComponentNode
 from src.core.pdf_parser import ExtractedPage, PDFSegment, PDFShape, PDFTextBlock
 from src.core.text_associator import SymbolAssociation
 from src.ml.classifier import COMPONENT_CLASSES, ComponentClassifier, RuleBasedClassifier
@@ -844,3 +844,59 @@ class TestOrphanWireReclaim:
         kept = gb._select_orphan_wires([touching, floating], [wire], scale=2.0)
         assert touching in kept
         assert floating not in kept
+
+
+class TestRecoverLostRefs:
+    """recover_lost_refs (opt-in): re-instantiate refs that lost the ref->cluster
+    collision as clusterless components with pins synthesised from nearby wires."""
+
+    @staticmethod
+    def _ref(text: str, cx: float, cy: float) -> SymbolAssociation:
+        return SymbolAssociation(
+            text=text, text_type="ref", text_pos=(cx, cy),
+            symbol_bbox=(cx - 1, cy - 1, cx + 1, cy + 1),
+            symbol_center=(cx, cy), distance=1.0, confidence=1.0,
+        )
+
+    def test_off_by_default(self) -> None:
+        assert BipartiteGraphBuilder().recover_lost_refs is False
+
+    def test_anchor_in_existing_bbox(self) -> None:
+        gb = BipartiteGraphBuilder()
+        gb.components["U1"] = ComponentNode(
+            node_id="U1", ref="U1", class_name="ic", bbox=(0, 0, 10, 10)
+        )
+        assert gb._anchor_in_existing_bbox(5, 5) is True
+        assert gb._anchor_in_existing_bbox(50, 50) is False
+
+    def test_recover_instantiates_lost_ref_with_capped_pins(self) -> None:
+        gb = BipartiteGraphBuilder(recover_lost_refs=True)
+        gb.components["U1"] = ComponentNode(
+            node_id="U1", ref="U1", class_name="ic", bbox=(0, 0, 10, 10)
+        )
+        refs = [self._ref("R1", 100, 100)]
+        wires = [
+            PDFSegment(start=(100, 100), end=(100, 120), item_type="line"),
+            PDFSegment(start=(105, 100), end=(125, 100), item_type="line"),
+        ]
+        gb._recover_lost_refs(refs, wires, scale=5.0)
+        assert "R1" in gb.components
+        assert gb.components["R1"].cluster is None
+        assert 1 <= len(gb.components["R1"].pins) <= 2  # resistor capped at 2 pins
+
+    def test_recover_skips_ref_inside_existing_bbox(self) -> None:
+        gb = BipartiteGraphBuilder(recover_lost_refs=True)
+        gb.components["U1"] = ComponentNode(
+            node_id="U1", ref="U1", class_name="ic", bbox=(0, 0, 200, 200)
+        )
+        refs = [self._ref("R1", 100, 100)]
+        wires = [PDFSegment(start=(100, 100), end=(100, 120), item_type="line")]
+        gb._recover_lost_refs(refs, wires, scale=5.0)
+        assert "R1" not in gb.components  # sub-label inside U1 -> not recovered
+
+    def test_recover_skips_unclassifiable_label(self) -> None:
+        gb = BipartiteGraphBuilder(recover_lost_refs=True)
+        refs = [self._ref("A0", 100, 100)]  # connector pin label, not a part
+        wires = [PDFSegment(start=(100, 100), end=(100, 120), item_type="line")]
+        gb._recover_lost_refs(refs, wires, scale=5.0)
+        assert "A0" not in gb.components
