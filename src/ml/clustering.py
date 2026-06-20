@@ -51,7 +51,7 @@ class SpatialClusterer:
         self.eps = eps
         self.min_samples = min_samples
 
-    def cluster(self, segments: list[PDFSegment], shapes: list[PDFShape]) -> list[ComponentCluster]:
+    def cluster(self, segments: list[PDFSegment], shapes: list[PDFShape], text_blocks: list[PDFTextBlock] | None = None) -> list[ComponentCluster]:
         """Clusterizza segmenti e forme in componenti candidate.
 
         `link_dist`: `self.eps` se fornito esplicitamente (override / test),
@@ -108,6 +108,8 @@ class SpatialClusterer:
             )
 
         clusters = self._merge_noise_clusters(clusters, link_dist)
+        if text_blocks:
+            clusters = self._text_guided_merge(clusters, text_blocks, link_dist)
 
         logger.info(
             "Clustering complete",
@@ -116,6 +118,93 @@ class SpatialClusterer:
             link_dist=link_dist,
         )
         return clusters
+
+    @staticmethod
+    def _text_guided_merge(clusters: list[ComponentCluster], text_blocks: list[PDFTextBlock], link_dist: float) -> list[ComponentCluster]:
+        import re
+        REF_PATTERN = re.compile(r"^[A-Za-z]+\d+[A-Za-z]*$")
+        refs = [t for t in text_blocks if REF_PATTERN.match(t.text.strip())]
+        
+        if not refs or not clusters:
+            return clusters
+            
+        n = len(clusters)
+        parent = list(range(n))
+        def find(a: int) -> int:
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+        def union(a: int, b: int) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        for ref in refs:
+            x0, y0, x1, y1 = ref.bbox
+            w = max(x1 - x0, 1.0)
+            h = max(y1 - y0, 1.0)
+            # Expand gravity zone reasonably
+            pad_x = max(20.0, w * 1.5)
+            pad_y = max(20.0, h * 1.5)
+            gz = (x0 - pad_x, y0 - pad_y, x1 + pad_x, y1 + pad_y)
+            
+            intersecting_idx = []
+            for i, c in enumerate(clusters):
+                if not (c.bbox[2] < gz[0] or c.bbox[0] > gz[2] or c.bbox[3] < gz[1] or c.bbox[1] > gz[3]):
+                    intersecting_idx.append(i)
+            
+            # Prevent merging multiple LARGE clusters (which means we are merging distinct symbols)
+            # A typical symbol has < 30 segments. If we find more than one cluster with > 5 segments,
+            # we might be merging distinct components.
+            large_clusters = sum(1 for i in intersecting_idx if clusters[i].num_segments > 5)
+            
+            if large_clusters <= 1:
+                # Safe to merge: at most one large cluster, the rest are small fragments
+                for i in range(1, len(intersecting_idx)):
+                    union(intersecting_idx[0], intersecting_idx[i])
+                
+        merged_groups = defaultdict(list)
+        for i in range(n):
+            merged_groups[find(i)].append(i)
+            
+        merged_clusters = []
+        for gid, indices in merged_groups.items():
+            if len(indices) == 1:
+                merged_clusters.append(clusters[indices[0]])
+            else:
+                new_segs = []
+                new_shapes = []
+                new_texts = []
+                for idx in indices:
+                    c = clusters[idx]
+                    new_segs.extend(c.segments)
+                    new_shapes.extend(c.shapes)
+                    new_texts.extend(c.text_blocks)
+                
+                xs = [s.start[0] for s in new_segs] + [s.end[0] for s in new_segs]
+                ys = [s.start[1] for s in new_segs] + [s.end[1] for s in new_segs]
+                for sh in new_shapes:
+                    xs.extend([sh.bbox[0], sh.bbox[2]])
+                    ys.extend([sh.bbox[1], sh.bbox[3]])
+                new_bbox = (min(xs), min(ys), max(xs), max(ys)) if xs else (0,0,0,0)
+                new_center = ((new_bbox[0] + new_bbox[2]) / 2, (new_bbox[1] + new_bbox[3]) / 2) if xs else (0,0)
+                
+                merged_clusters.append(
+                    ComponentCluster(
+                        cluster_id=0,
+                        segments=new_segs,
+                        shapes=new_shapes,
+                        text_blocks=new_texts,
+                        bbox=new_bbox,
+                        center=new_center
+                    )
+                )
+                
+        for i, c in enumerate(merged_clusters):
+            c.cluster_id = i
+            
+        return merged_clusters
 
     @staticmethod
     def _merge_noise_clusters(clusters: list[ComponentCluster], link_dist: float) -> list[ComponentCluster]:

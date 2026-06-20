@@ -86,7 +86,8 @@ class BipartiteGraphBuilder:
 
         # 1. Clustering spaziale: SOLO symbol-primitive
         clusterer = SpatialClusterer(eps=self.cluster_eps)
-        clusters = clusterer.cluster(symbol_segs, page.shapes)
+        page_shape = (page.width, page.height) if hasattr(page, "width") else (1000, 1000)
+        clusters = clusterer.cluster(symbol_segs, page.shapes, text_blocks=page.text_blocks)
 
         # 2. Associazione testo
         refs, values, _ = self.text_associator.associate(page)
