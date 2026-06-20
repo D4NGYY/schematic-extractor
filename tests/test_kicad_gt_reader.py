@@ -109,6 +109,30 @@ def test_parse_lib_symbols_and_absolute_position() -> None:
         assert sch.symbols[0].pins[0].pin_num == "1"
 
 
+def test_gt_excludes_power_symbols_from_components() -> None:
+    # KiCad refs prefixed with '#' (e.g. #PWR0xx power ports, #FLG power flags)
+    # are virtual symbols / net anchors, NOT physical components. They must not
+    # count as components or they crush component-level recall.
+    text = """(kicad_sch (version 20211123)
+      (symbol (lib_id "Device:R") (at 10 20)
+        (property "Reference" "R1" (at 15 20 0))
+        (pin "1" (uuid "1") (at 10 15 90))
+      )
+      (symbol (lib_id "power:GND") (at 10 30)
+        (property "Reference" "#PWR01" (at 10 35 0))
+        (pin "1" (uuid "2") (at 10 15 90))
+      )
+    )"""
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "pwr.kicad_sch"
+        p.write_text(text, encoding="utf-8")
+
+        sch = parse_kicad_sch(p)
+        graph = build_gt_graph(sch)
+        assert graph.components == {"R1"}
+        assert "#PWR01" not in graph.components
+
+
 def test_gt_graph_micro_after_fix() -> None:
     p = Path("test_input/multi_schematic/arduino_micro/arduino_micro.kicad_sch")
     if not p.exists():

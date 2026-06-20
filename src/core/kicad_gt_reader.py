@@ -244,6 +244,11 @@ def build_gt_graph(sch: KicadSchematic) -> GTGraph:
     graph = GTGraph()
 
     for sym in sch.symbols:
+        # KiCad refs prefixed with '#' (#PWR power ports, #FLG power flags) are
+        # virtual symbols / net anchors, not physical components — exclude them
+        # from the component set (their pins still anchor nets below).
+        if sym.ref.startswith("#"):
+            continue
         graph.components.add(sym.ref)
 
     # Group connected points
