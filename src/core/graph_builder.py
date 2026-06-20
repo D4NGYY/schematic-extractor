@@ -92,6 +92,19 @@ class BipartiteGraphBuilder:
         clusterer = SpatialClusterer(eps=self.cluster_eps)
         clusters = clusterer.cluster(symbol_segs, page.shapes, text_blocks=page.text_blocks)
 
+        # Reclaim connecting stubs dropped as clustering noise: short axis-aligned
+        # segments that did NOT form a symbol body are wires, not symbols. They were
+        # invisible to recover_stub_wires (which only inspects clustered segments),
+        # so short nets between close components never formed (measured pin-dangling:
+        # ampli_ht 48%, ecc83 23%). Only noise orphans are reclaimed, so dense symbol
+        # bodies (which DO cluster) are untouched -> no Bryston over-merge.
+        orphan_wires = [
+            s
+            for s in clusterer.orphan_segments
+            if SpatialClusterer._is_axis_aligned(s)
+        ]
+        wire_segs = wire_segs + orphan_wires
+
         # 2. Associazione testo
         refs, values, net_labels = self.text_associator.associate(page)
         # D4: dict-of-list per evitare collisioni quando due ref si mappano allo stesso cluster

@@ -50,6 +50,10 @@ class SpatialClusterer:
     def __init__(self, eps: float | None = None, min_samples: int = 2) -> None:
         self.eps = eps
         self.min_samples = min_samples
+        # Segments dropped as clustering noise (groups < min_samples). Connecting
+        # stubs that did not form a symbol body collect here; build_from_page
+        # reclaims the axis-aligned ones as wires. See HANDOFF wire-lever.
+        self.orphan_segments: list[PDFSegment] = []
 
     def cluster(self, segments: list[PDFSegment], shapes: list[PDFShape], text_blocks: list[PDFTextBlock] | None = None) -> list[ComponentCluster]:
         """Clusterizza segmenti e forme in componenti candidate.
@@ -61,6 +65,7 @@ class SpatialClusterer:
         (es. cornici pagina lontane da ogni tratto) sono scartate.
         Gruppi con meno di `min_samples` membri (segmenti + shapes) sono noise.
         """
+        self.orphan_segments = []
         if not segments and not shapes:
             return []
 
@@ -86,6 +91,7 @@ class SpatialClusterer:
         for gid, seg_idxs in enumerate(groups):
             sh_idxs = shape_assign.get(gid, [])
             if len(seg_idxs) + len(sh_idxs) < self.min_samples:
+                self.orphan_segments.extend(segments[i] for i in seg_idxs)
                 continue  # noise
             cl_segs = [segments[i] for i in seg_idxs]
             cl_shapes = [shapes[i] for i in sh_idxs]
@@ -416,7 +422,7 @@ class SpatialClusterer:
                     cluster.segments.remove(s)
                     recovered.append(s)
         wire_segs.extend(recovered)
-        print(f"DEBUG: recover_stub_wires recovered {len(recovered)} segments")
+        logger.debug("recover_stub_wires", recovered=len(recovered))
         return recovered
 
     @staticmethod
@@ -485,3 +491,4 @@ class SpatialClusterer:
         kth_dists = dists[:, -1]
         eps = float(np.percentile(kth_dists, 90)) * 1.5
         return max(eps, 5.0)
+           
