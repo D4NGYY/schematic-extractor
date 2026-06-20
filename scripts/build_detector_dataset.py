@@ -135,8 +135,11 @@ def main() -> None:
     labeled_names = [n for n in names if summary[n].get("labeled", 0) > 0]
     labeled_names.sort()
     val = {n for i, n in enumerate(labeled_names) if i % 5 == 0}
-    train_list = [f"images/{n}.png" for n in labeled_names if n not in val]
-    val_list = [f"images/{n}.png" for n in labeled_names if n in val]
+    # Ultralytics resolves txt image paths unreliably when relative; write ABSOLUTE
+    # paths (resolved on whatever machine runs this) so training needs no patching.
+    img_dir = (out / "images").resolve()
+    train_list = [str(img_dir / f"{n}.png") for n in labeled_names if n not in val]
+    val_list = [str(img_dir / f"{n}.png") for n in labeled_names if n in val]
     (out / "train.txt").write_text("\n".join(train_list))
     (out / "val.txt").write_text("\n".join(val_list))
     (out / "data.yaml").write_text(
