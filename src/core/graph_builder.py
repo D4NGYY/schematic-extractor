@@ -90,7 +90,7 @@ class BipartiteGraphBuilder:
         clusters = clusterer.cluster(symbol_segs, page.shapes, text_blocks=page.text_blocks)
 
         # 2. Associazione testo
-        refs, values, _ = self.text_associator.associate(page)
+        refs, values, net_labels = self.text_associator.associate(page)
         # D4: dict-of-list per evitare collisioni quando due ref si mappano allo stesso cluster
         ref_map: dict[int, list[SymbolAssociation]] = {}
         val_map: dict[int, list[SymbolAssociation]] = {}
@@ -110,6 +110,12 @@ class BipartiteGraphBuilder:
 
         # 4. Trova nets: BFS sui wire-candidate pre-separati
         self._build_nets(wire_segs, scale, junctions=page.junction_candidates())
+
+        # 4b. Net merging per label: net che condividono lo stesso nome (GND, +5V,
+        # RESET…) sono un'unica net elettrica, come negli schematici si uniscono
+        # per nome e non solo per filo. Eseguito PRIMA di connettere i pin.
+        label_tol = self._derive_wire_tol(self._all_wire_segs())
+        self._merge_nets_by_label(net_labels, tol=3.0 * label_tol)
 
         # 5. Pin-point matching: connetti pin ai nets
         self._connect_pins_to_nets(scale)
@@ -373,6 +379,51 @@ class BipartiteGraphBuilder:
                 if net_id:
                     self.graph.add_edge(comp.node_id, net_id, pin_id=pin_node.pin_id)
 
+    def _merge_nets_by_label(
+        self, net_labels: list[SymbolAssociation], tol: float
+    ) -> None:
+        """Fonde le net che condividono lo stesso nome di label di rete.
+
+        Negli schematici i punti etichettati con lo stesso nome (GND, +5V, VCC,
+        RESET…) appartengono alla stessa net anche senza filo continuo — è così
+        che la ground-truth KiCad unisce le net. Le label puramente numeriche
+        sono numeri di pin, non nomi di rete, e vengono ignorate.
+        """
+        from collections import defaultdict
+
+        name_to_nets: dict[str, set[str]] = defaultdict(set)
+        for lbl in net_labels:
+            name = lbl.text.strip()
+            if not name or name.isdigit():
+                continue
+            nid = self._find_nearest_net(lbl.symbol_center[0], lbl.symbol_center[1], tol)
+            if nid:
+                name_to_nets[name].add(nid)
+
+        for name, nids in name_to_nets.items():
+            canonical = self._union_nets(nids)
+            if canonical is None:
+                continue
+            self.nets[canonical].name = name
+            if self.graph.has_node(canonical):
+                self.graph.nodes[canonical]["name"] = name
+
+    def _union_nets(self, net_ids: set[str]) -> str | None:
+        """Unisce più net in una canonica: sposta i segmenti, elimina le altre
+        dal grafo e da self.nets. Ritorna l'id canonico (None se vuoto)."""
+        present = [nid for nid in net_ids if nid in self.nets]
+        if not present:
+            return None
+        canonical = present[0]
+        canon = self.nets[canonical]
+        for nid in present[1:]:
+            canon.segments.extend(self.nets[nid].segments)
+            del self.nets[nid]
+            if self.graph.has_node(nid):
+                self.graph.remove_node(nid)
+        if self.graph.has_node(canonical):
+            self.graph.nodes[canonical]["segments"] = canon.segments
+        return canonical
 
     @staticmethod
     def _segments_intersect(a: PDFSegment, b: PDFSegment) -> bool:

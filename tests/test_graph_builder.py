@@ -691,3 +691,50 @@ class TestPinConnectP2:
         assert d2 > (3.0 * 1.0)**2
 
 
+
+
+class TestMergeNetsByLabel:
+    """Label-based net merging: nets sharing a named label (GND, +5V, RESET)
+    belong to one electrical net, like KiCad joins nets by name."""
+
+    def _net(self, nid: str, x: float):
+        from src.core.graph_builder import NetNode
+        return NetNode(
+            net_id=nid,
+            name=f"Net-{nid}",
+            segments=[PDFSegment(start=(x, 0), end=(x + 10, 0), item_type="line")],
+        )
+
+    def _label(self, text: str, x: float) -> SymbolAssociation:
+        return SymbolAssociation(
+            text=text,
+            text_type="net_label",
+            text_pos=(x, 0),
+            symbol_bbox=(x, 0, x, 0),
+            symbol_center=(x + 5, 0),
+            distance=0.0,
+            confidence=1.0,
+        )
+
+    def _builder_with_two_nets(self) -> BipartiteGraphBuilder:
+        b = BipartiteGraphBuilder()
+        n1, n2 = self._net("N1", 0.0), self._net("N2", 100.0)
+        b.nets = {"N1": n1, "N2": n2}
+        b.graph.add_node("N1", bipartite=1, **n1.__dict__)
+        b.graph.add_node("N2", bipartite=1, **n2.__dict__)
+        return b
+
+    def test_merges_nets_sharing_named_label(self) -> None:
+        b = self._builder_with_two_nets()
+        labels = [self._label("GND", 0.0), self._label("GND", 100.0)]
+        b._merge_nets_by_label(labels, tol=5.0)
+        assert len(b.nets) == 1
+        merged = next(iter(b.nets.values()))
+        assert merged.name == "GND"
+        assert len(merged.segments) == 2
+
+    def test_skips_purely_numeric_pin_labels(self) -> None:
+        b = self._builder_with_two_nets()
+        labels = [self._label("1", 0.0), self._label("1", 100.0)]
+        b._merge_nets_by_label(labels, tol=5.0)
+        assert len(b.nets) == 2  # pin numbers must not merge distinct nets

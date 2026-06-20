@@ -36,8 +36,13 @@
   - **Baseline F1 (post-fix):** micro f1_new=0.21 (overlap 24/48), nano f1_new=0.00 (overlap **3/34**). Il metric è gated sui common_refs e guidato da `fn` (connettività net).
   - **Causa radice misurata:** pin connection **16%** (98/612), net degree max **2** (la GND reale GT tocca 17 pin). Le net estratte sono schegge.
   - **Smentito per esperimento:** abbassare la soglia di `separate_wires` (factor 3→1) **non** aumenta `netmaxdeg` (resta 2) e **peggiora** Bryston (comps 13→9, blob). Quindi `separate_wires` NON è la leva.
-  - **Diagnosi:** problema multi-fattore = (a) completezza estrazione fili nel PDF, (b) pin **sovra-generati** (`select_pins` ritorna free-endpoint interni ai simboli, non terminali reali: 612 pin per ~110 comp), (c) reach BFS. Da attaccare con l'**overlay visiva** (pin+fili) prima di toccare codice delicato.
+  - **Diagnosi visiva (overlay arduino_micro, 2026-06-20):** problema multi-fattore =
+    1. **🎯 LEVER DOMINANTE — power-symbol come net anchor (DA FARE):** GND/+5V/VCC sono **simboli di potenza clusterizzati come componenti** (box rossi isolati nell'overlay), non ancore di net. Poiché GND è la net più grande, è esplosa in decine di box isolati → `netmaxdeg=2`, pin-conn 16%. La GT fa l'opposto (i `#PWR` ancorano le net per nome). Fix: rilevare i simboli di potenza e trattarli come ancore di net nominate → alimenta il label-merge sotto.
+    2. **Label-merge per nome (DONE):** `_merge_nets_by_label` in graph_builder fonde net con stesso nome label (GND/+5V/RESET), skippa label numeriche (pin number). Corretto + testato, ma oggi scatta poco perché i label GND stanno sui simboli di potenza, non sui fili (vedi lever 1). 2 test.
+    3. **Pin sovra-generati:** `select_pins`/`free_endpoints` ritorna endpoint interni ai simboli e del testo (988 pin per 112 comp). Diluisce la connection rate.
+    4. **net_label association rumorosa:** pesca part-number come label (`ATMEGA32U4-XUMU`, `M20-9980345`). Da raffinare in `text_associator`.
   - **2° leva indipendente:** ref-recovery (overlap nano 3/34) — l'estrattore non recupera i designator (text_associator); è il tetto della recall.
+  - **Overlay riproducibile:** `uv run python -c "from src.ui.render import save_overlay; save_overlay('test_input/multi_schematic/arduino_micro/arduino_micro.pdf','diagnosi_d3/overlay_micro.png',dpi=200)"`.
 
 - [x] 🟡 **Phase 4 — ERC** (`src/core/erc.py`): ISOLATED_COMPONENT, FLOATING_PIN, DANGLING_NET, UNCONNECTED_NET, UNNAMED_NET. 16 test. Bryston: 31 err + 1 warn (stub matching debole → D6 prioritario).
 - [x] 🔴 **Phase 5 — LLM tool calling** (`src/llm/tools.py`, `src/llm/agent.py`, `src/cli/query.py`). 7 tools, dual-mode parsing, Ollama. **Debugged end-to-end (2026-06-20):** fixed broken GraphContext schema, 2 crash bugs, hardened ReAct parser. Scored benchmark → qwen2.5:7b 25/25 (5/5). See `TEST_MANUAL.md`.
