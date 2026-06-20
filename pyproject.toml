@@ -36,6 +36,7 @@ dependencies = [
     "pandas>=2.0.0",
     "pillow>=10.0.0",
     "pyyaml>=6.0",
+    "openai>=2.43.0",
 ]
 
 [project.optional-dependencies]
@@ -51,7 +52,12 @@ dev = [
 ]
 
 [project.scripts]
-schematic-extractor = "src.ui.app:main"
+schematic-extractor = "src.cli.query:app"
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.4.0",
+]
 
 [tool.ruff]
 target-version = "py312"
