@@ -2,8 +2,10 @@
 
 Banco di prova visivo per tarare il clustering (link_dist) e ispezionare la
 connettivita (pin->net / D3): renderizza il PDF e sovrappone le bounding box dei
-componenti (verde = connesso a >=1 net, rosso = isolato), i loro ref e i
-segmenti-filo delle net. Usato sia headless (salva PNG) sia dalla UI Streamlit.
+componenti (verde = connesso a >=1 net, rosso = isolato), i loro ref, i
+segmenti-filo delle net (blu) e i pin candidati (giallo = free-endpoint dei
+simboli, cioe' estremi che appartengono a un solo tratto = terminali probabili).
+Usato sia headless (salva PNG) sia dalla UI Streamlit.
 """
 from __future__ import annotations
 
@@ -15,10 +17,12 @@ from PIL import Image, ImageDraw
 
 from src.core.graph_builder import BipartiteGraphBuilder
 from src.core.pdf_parser import VectorExtractor
+from src.ml.clustering import SpatialClusterer
 
 _CONNECTED = (40, 180, 80, 255)   # verde
 _ISOLATED = (220, 50, 50, 255)    # rosso
 _NET = (30, 120, 220, 170)        # blu
+_PIN = (245, 200, 20, 255)        # giallo
 
 
 @dataclass
@@ -28,6 +32,7 @@ class OverlayResult:
     nets: int
     edges: int
     isolated: int
+    pins: int
     link_dist: float | None
 
 
@@ -46,6 +51,7 @@ def build_overlay(
     page_num: int = 0,
     dpi: int = 200,
     link_dist: float | None = None,
+    show_pins: bool = True,
 ) -> OverlayResult:
     """Costruisce il grafo (con link_dist scelto) e disegna l'overlay diagnostico."""
     page = VectorExtractor().extract(pdf_path)[page_num]
@@ -64,8 +70,10 @@ def build_overlay(
                 width=2,
             )
 
-    # Bounding box componenti: verde se connesso, rosso se isolato.
+    # Bounding box componenti (verde=connesso / rosso=isolato) + pin candidati (giallo).
     isolated = 0
+    pin_total = 0
+    r = max(2.0, zoom * 1.5)  # raggio marker pin in px
     for node_id, comp in builder.components.items():
         if comp.bbox is None:
             continue
@@ -77,12 +85,19 @@ def build_overlay(
         draw.rectangle([x0, y0, x1, y1], outline=color, width=2)
         draw.text((x0, max(0.0, y0 - 11)), comp.ref, fill=color)
 
+        if show_pins and comp.cluster is not None:
+            for px, py in SpatialClusterer.free_endpoints(comp.cluster.segments):
+                pin_total += 1
+                cx, cy = px * zoom, py * zoom
+                draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=_PIN)
+
     return OverlayResult(
         image=img,
         components=len(builder.components),
         nets=len(builder.nets),
         edges=graph.number_of_edges(),
         isolated=isolated,
+        pins=pin_total,
         link_dist=link_dist,
     )
 

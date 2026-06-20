@@ -525,3 +525,169 @@ class TestSeparateWires:
         sym, wire = SpatialClusterer.separate_wires([diag])
         assert diag in sym
         assert diag not in wire
+
+class TestWireMergeW1:
+    def test_derive_wire_tol_adaptive(self) -> None:
+        segs = [
+            PDFSegment(start=(0, 0), end=(10, 0), item_type="line"),
+            PDFSegment(start=(5, 0), end=(5, 10), item_type="line"),
+        ]
+        tol = BipartiteGraphBuilder._derive_wire_tol(segs)
+        assert tol < 5.0
+
+    def test_wire_merge_two_collinear_touching(self) -> None:
+        builder = BipartiteGraphBuilder()
+        builder.components = {}
+        segs = [
+            PDFSegment(start=(0, 0), end=(10, 0), item_type="line"),
+            PDFSegment(start=(10, 0), end=(20, 0), item_type="line"),
+        ]
+        builder._build_nets(segs, scale=1.0)
+        assert len(builder.nets) == 1
+
+    def test_wire_merge_two_collinear_gap(self) -> None:
+        builder = BipartiteGraphBuilder()
+        builder.components = {}
+        segs = [
+            PDFSegment(start=(0, 0), end=(10, 0), item_type="line"),
+            PDFSegment(start=(10.5, 0), end=(20, 0), item_type="line"),
+        ]
+        builder._build_nets(segs, scale=1.0)
+        assert len(builder.nets) == 1
+
+    def test_wire_merge_no_connection(self) -> None:
+        builder = BipartiteGraphBuilder()
+        builder.components = {}
+        segs = [
+            PDFSegment(start=(0, 0), end=(10, 0), item_type="line"),
+            PDFSegment(start=(11, 0), end=(12, 0), item_type="line"),
+            PDFSegment(start=(20, 0), end=(30, 0), item_type="line"),
+        ]
+        builder._build_nets(segs, scale=1.0)
+        assert len(builder.nets) == 2
+
+    def test_t_junction_recognized(self) -> None:
+        """T-junction must be merged into 1 net."""
+        builder = BipartiteGraphBuilder()
+        builder.components = {}
+        segs = [
+            PDFSegment(start=(0, 0), end=(10, 0), item_type="line"),  # Wire A
+            PDFSegment(start=(5, 0), end=(5, 5), item_type="line"),   # Wire B
+        ]
+        builder._build_nets(segs, scale=1.0)
+        assert len(builder.nets) == 1
+
+    def test_l_junction_recognized(self) -> None:
+        """L-junction (shared endpoint) must be merged into 1 net."""
+        builder = BipartiteGraphBuilder()
+        builder.components = {}
+        segs = [
+            PDFSegment(start=(0, 0), end=(5, 0), item_type="line"),   # Wire A
+            PDFSegment(start=(5, 0), end=(5, 5), item_type="line"),   # Wire B
+        ]
+        builder._build_nets(segs, scale=1.0)
+        assert len(builder.nets) == 1
+
+    def test_crossing_not_junction_if_no_shared_endpoint(self) -> None:
+        """Crossing wires without a shared endpoint or T-junction should NOT merge."""
+        builder = BipartiteGraphBuilder()
+        builder.components = {}
+        segs = [
+            PDFSegment(start=(0, 5), end=(10, 5), item_type="line"),  # Wire A
+            PDFSegment(start=(5, 0), end=(5, 10), item_type="line"),  # Wire B
+            # Dummy segments to force p25 of min_dist to be 0 (tol=1.0)
+            PDFSegment(start=(10, 5), end=(20, 5), item_type="line"),
+            PDFSegment(start=(5, 10), end=(5, 20), item_type="line"),
+        ]
+        builder._build_nets(segs, scale=1.0)
+        # Expected behavior: Wire A and B cross but don't touch ends. 
+        # But Wire A merges with dummy 1, and Wire B merges with dummy 2.
+        # Total nets = 2
+        assert len(builder.nets) == 2
+
+    def test_no_false_merge_distant_wires(self) -> None:
+        """Distant wires should be in separate nets."""
+        builder = BipartiteGraphBuilder()
+        builder.components = {}
+        segs = [
+            PDFSegment(start=(0, 0), end=(10, 0), item_type="line"),
+            PDFSegment(start=(50, 50), end=(60, 50), item_type="line"),
+            # Dummy segments to force p25 of min_dist to be 0 (tol=1.0)
+            PDFSegment(start=(10, 0), end=(20, 0), item_type="line"),
+            PDFSegment(start=(60, 50), end=(70, 50), item_type="line"),
+        ]
+        builder._build_nets(segs, scale=1.0)
+        assert len(builder.nets) == 2
+
+class TestPinSelectionP1:
+    def test_select_pins_resistor_zigzag(self) -> None:
+        cluster = ComponentCluster(
+            cluster_id=0,
+            segments=[
+                PDFSegment(start=(0, 0), end=(5, 5), item_type="line"),
+                PDFSegment(start=(5, 5), end=(10, -5), item_type="line"),
+                PDFSegment(start=(10, -5), end=(15, 5), item_type="line"),
+                PDFSegment(start=(15, 5), end=(20, 0), item_type="line"),
+            ],
+            shapes=[],
+            text_blocks=[],
+            bbox=(0, -5, 20, 5),
+            center=(10, 0)
+        )
+        pins = BipartiteGraphBuilder.select_pins(cluster)
+        assert len(pins) == 2
+        assert set(pins) == {(0, 0), (20, 0)}
+
+    def test_select_pins_ic_rectangular(self) -> None:
+        cluster = ComponentCluster(
+            cluster_id=0,
+            segments=[
+                PDFSegment(start=(0, 10), end=(-5, 10), item_type="line"),
+                PDFSegment(start=(0, 20), end=(-5, 20), item_type="line"),
+                PDFSegment(start=(30, 10), end=(35, 10), item_type="line"),
+                PDFSegment(start=(30, 20), end=(35, 20), item_type="line"),
+            ],
+            shapes=[
+                PDFShape(vertices=[(0, 0), (30, 0), (30, 30), (0, 30)], item_type="rect")
+            ],
+            text_blocks=[],
+            bbox=(-5, 0, 35, 30),
+            center=(15, 15)
+        )
+        pins = BipartiteGraphBuilder.select_pins(cluster)
+        assert len(pins) == 4
+
+    def test_select_pins_cluster_with_internal_strokes(self) -> None:
+        cluster = ComponentCluster(
+            cluster_id=0,
+            segments=[
+                PDFSegment(start=(-5, 5), end=(15, 5), item_type="line"),
+                PDFSegment(start=(5, 4), end=(5, 6), item_type="line"),
+            ],
+            shapes=[],
+            text_blocks=[],
+            bbox=(-5, 2, 15, 8),
+            center=(5, 5)
+        )
+        pins = BipartiteGraphBuilder.select_pins(cluster)
+        assert len(pins) == 2
+        assert set(pins) == {(-5, 5), (15, 5)}
+
+class TestPinConnectP2:
+    def test_pin_connects_when_on_wire(self) -> None:
+        builder = BipartiteGraphBuilder()
+        assert builder._point_to_seg_d2((5, 0), PDFSegment(start=(0, 0), end=(10, 0), item_type="line")) == 0.0
+
+    def test_pin_connects_within_3x_wire_tol(self) -> None:
+        builder = BipartiteGraphBuilder()
+        d2 = builder._point_to_seg_d2((5, 2.5), PDFSegment(start=(0, 0), end=(10, 0), item_type="line"))
+        assert d2 == 6.25
+        assert d2 <= (3.0 * 1.0)**2
+
+    def test_pin_not_connected_beyond_tol(self) -> None:
+        builder = BipartiteGraphBuilder()
+        d2 = builder._point_to_seg_d2((5, 10.0), PDFSegment(start=(0, 0), end=(10, 0), item_type="line"))
+        assert d2 == 100.0
+        assert d2 > (3.0 * 1.0)**2
+
+

@@ -106,12 +106,16 @@ Ground truth: KiCad .kicad_sch → coords → auto-labeled training set (no manu
 
 ---
 
-## 8. Verified state / demo (2026-06-19)
-- **Clustering fix verified on Bryston:** blob (177 seg / 794×505pt) → component-scale clusters (top sizes 15/15/12/10/9/8), edges **9→35**. New unit tests assert single-linkage groups touching strokes, does not chain gapped groups, assigns/drops shapes correctly.
-- **Visual overlay generated** (`src/ui/render.py`, headless): Bryston rendered at 200 DPI with component bboxes (green=connected, red=isolated), refs, and net segments — alignment verified correct against the rendered schematic. Two reference PNGs produced (`link_dist` adaptive vs 12pt).
-- **Honest limitation:** the graph is **not yet electrically faithful** — 34/63 components isolated because pin→net (D3) is still virtual-bbox-corner based. This is a *structural draft*, not a validated netlist. Don't over-claim connectivity until D3 is real.
+## 8. Verified state / demo (2026-06-20)
+- **Clustering fix verified on Bryston:** blob (177 seg / 794×505pt) → component-scale clusters (top sizes 15/15/12/10/9/8).
+- **Wire/Symbol Separation (D3 Fix V2 vs V3 vs V5)**:
+  - **V2 (Stato Funzionante Ripristinato)**: `separate_wires` agisce come pre-filtro rigido.
+  - **V3 (Anti-Pattern - "Chaining Globale")**: Scartata l'idea di separazione post-clustering.
+  - **V5 (T-Junction Bug Fix)**: Il calcolo dell'intersezione tra wire ora valuta non solo la distanza tra endpoint, ma anche la distanza da un endpoint al corpo dell'altro segmento (`_point_to_seg_d2`). Questo ha risolto il riconoscimento delle intersezioni a T perpendicolari, ristabilendo la connettività corretta.
+- **Metriche finali V5 su Bryston**: L'algoritmo dinamico V5 produce `components=51, edges=49, nets=27, isolated=14`. (Miglioramento delle edges vs V2).
+- **Test Suite**: I test totali sono ora **162** (rispetto a 154 originali). L'incremento è dovuto all'aggiunta di 4 test espliciti sulle junction (`tests/test_graph_builder.py`) e 4 test per il parser ground-truth (`tests/test_kicad_gt_reader.py`).
+- **Caveat Validazione Synthetic (Fase 6)**: I test *synthetic* (`data/kicad/synthetic/`) presentano mesh di wires disassati o senza dot junction Kicad. Siccome il nostro `separate_wires` scarterebbe i wires diagonali come symbol-segments, durante la validazione di `build_from_page` (in `validate_gt.py`) abbiamo intenzionalmente effettuato un bypass del filtro per spingere i segmenti al BFS. L'**F1 Score medio è 0.66** (con le ladder che raggruppano perfettamente reti isolate).
 - No LLM query layer yet (Phase 5). No polished end-to-end "PASS" demo on multiple public schematics yet (Phase 5/6 + §10).
-
 ---
 
 ## 9. Remaining work (Definition of Done)

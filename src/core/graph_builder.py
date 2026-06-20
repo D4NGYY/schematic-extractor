@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -170,20 +171,111 @@ class BipartiteGraphBuilder:
                 best = cluster.cluster_id
         return best
 
-    def _build_nets(self, wire_segs: list[PDFSegment], scale: float) -> None:
-        """Costruisce nets via BFS sui segmenti non appartenenti a cluster.
 
-        Args:
-            wire_segs: segmenti esclusi dai cluster (pre-calcolati in build_from_page).
-            scale: scala caratteristica del disegno (D6) per wire_tol proporzionale.
-        """
+    @staticmethod
+    def _derive_wire_tol(wire_segs: list[PDFSegment]) -> float:
+        # wire_tol derivation: p25 of min endpoint→segment distance across all wire_segs.
+        # Rationale: in real schematics, ~70% of junctions are T-junctions where one wire's endpoint
+        # touches ANOTHER wire's SEGMENT (not its endpoint). Measuring endpoint→endpoint misses
+        # these connections and inflates wire_tol, causing false net merges. Endpoint→segment
+        # captures the true junction geometry.
+        if len(wire_segs) < 2:
+            return 1.0
+        import numpy as np
+        min_dists = []
+        for i, s1 in enumerate(wire_segs):
+            for pt in (s1.start, s1.end):
+                best_d2 = float('inf')
+                for j, s2 in enumerate(wire_segs):
+                    if i == j:
+                        continue
+                    d2 = BipartiteGraphBuilder._point_to_seg_d2(pt, s2)
+                    if d2 < best_d2:
+                        best_d2 = d2
+                if best_d2 != float('inf'):
+                    min_dists.append(math.sqrt(best_d2))
+        if not min_dists:
+            return 1.0
+        p25 = float(np.percentile(min_dists, 25))
+        if p25 < 0.1:
+            return 1.0
+        return p25
+
+    @staticmethod
+    def _derive_pin_border_tol(cluster: ComponentCluster) -> float:
+        from src.ml.clustering import SpatialClusterer
+        free = SpatialClusterer.free_endpoints(cluster.segments)
+        if not free:
+            return 1.0
+        x0, y0, x1, y1 = cluster.bbox
+        import numpy as np
+        dists = []
+        for px, py in free:
+            dl = px - x0
+            dr = x1 - px
+            dt = py - y0
+            db = y1 - py
+            dists.append(min(dl, dr, dt, db))
+        return max(float(np.median(dists)), 1.0)
+
+    @staticmethod
+    def select_pins(cluster: ComponentCluster) -> list[tuple[float, float]]:
+        from src.ml.clustering import SpatialClusterer
+        free = SpatialClusterer.free_endpoints(cluster.segments)
+        if not free:
+            return []
+        tol = BipartiteGraphBuilder._derive_pin_border_tol(cluster)
+        x0, y0, x1, y1 = cluster.bbox
+        pins = []
+        for px, py in free:
+            dl = px - x0
+            dr = x1 - px
+            dt = py - y0
+            db = y1 - py
+            if min(dl, dr, dt, db) <= tol + 1e-3:
+                pins.append((px, py))
+        return pins
+
+    def _all_wire_segs(self) -> list[PDFSegment]:
+        segs = []
+        for n in self.nets.values():
+            segs.extend(n.segments)
+        return segs
+
+    @staticmethod
+    def _point_to_seg_d2(pt: tuple[float, float], seg: PDFSegment) -> float:
+        px, py = pt
+        x0, y0 = seg.start
+        x1, y1 = seg.end
+        dx, dy = x1 - x0, y1 - y0
+        if dx == 0 and dy == 0:
+            return (px - x0)**2 + (py - y0)**2
+        t = ((px - x0) * dx + (py - y0) * dy) / (dx*dx + dy*dy)
+        t = max(0.0, min(1.0, t))
+        qx = x0 + t * dx
+        qy = y0 + t * dy
+        return (px - qx)**2 + (py - qy)**2
+
+    def _find_nearest_net(self, px: float, py: float, pin_tol: float) -> str | None:
+        best_net = None
+        best_d2 = pin_tol * pin_tol
+        for n in self.nets.values():
+            for s in n.segments:
+                d2 = self._point_to_seg_d2((px, py), s)
+                if d2 <= best_d2:
+                    best_d2 = d2
+                    best_net = n.net_id
+        return best_net
+
+    def _build_nets(self, wire_segs: list[PDFSegment], scale: float) -> None:
         if not wire_segs:
             return
 
-        # D6: tolleranza proporzionale alla scala.
-        # 0.5× scale gestisce grid step ≈ p10/2 tipici dei PDF EDA (≈2–3pt su Bryston).
-        wire_tol = max(1.0, scale * 0.5)
+        from src.ml.clustering import SpatialClusterer
+        clusters = [comp.cluster for comp in self.components.values() if comp.cluster]
+        SpatialClusterer.recover_stub_wires(clusters, wire_segs)
 
+        wire_tol = self._derive_wire_tol(wire_segs)
         visited: set[int] = set()
         net_counter = 0
 
@@ -221,72 +313,55 @@ class BipartiteGraphBuilder:
         return max(1.0, lengths[idx])
 
     def _segments_touch(self, a: PDFSegment, b: PDFSegment, tol: float = 1.0) -> bool:
-        """Verifica se due segmenti si toccano (estremità vicine)."""
+        """Verifica se due segmenti si toccano (estremità vicine o T-junction).
+
+        Two wires "touch" if any of these is within wire_tol:
+        (a) endpoint-endpoint distance (L-junction, shared endpoint)
+        (b) endpoint-segment distance A→B (T-junction, A terminates on B)
+        (c) endpoint-segment distance B→A (T-junction, B terminates on A)
+        Note: pure endpoint-endpoint (old behavior) misses ALL T-junctions, which are
+        ~70% of real schematic junctions. This is why pre-V5 had grado 3+ = 0.
+        """
         ends_a = [a.start, a.end]
         ends_b = [b.start, b.end]
+
+        # (a) Endpoint-endpoint distance
         for ea in ends_a:
             for eb in ends_b:
-                if ((ea[0] - eb[0]) ** 2 + (ea[1] - eb[1]) ** 2) ** 0.5 < tol:
+                if ((ea[0] - eb[0]) ** 2 + (ea[1] - eb[1]) ** 2) ** 0.5 <= tol + 1e-3:
                     return True
+
+        # (b) Endpoint-segment distance A -> B
+        for ea in ends_a:
+            if BipartiteGraphBuilder._point_to_seg_d2(ea, b) <= (tol + 1e-3)**2:
+                return True
+
+        # (c) Endpoint-segment distance B -> A
+        for eb in ends_b:
+            if BipartiteGraphBuilder._point_to_seg_d2(eb, a) <= (tol + 1e-3)**2:
+                return True
+
         return False
 
     def _connect_pins_to_nets(self, scale: float) -> None:
-        """Connette i pin dei componenti ai nets via stub matching scale-aware.
+        all_wires = self._all_wire_segs()
+        wire_tol = self._derive_wire_tol(all_wires)
+        pin_tol = 3.0 * wire_tol
 
-        Args:
-            scale: scala caratteristica del disegno (D6) usata come floor per lo stub.
-        """
         for comp in self.components.values():
-            if comp.bbox is None:
+            if comp.cluster is None:
                 continue
-            x0, y0, x1, y1 = comp.bbox
-            w, h = x1 - x0, y1 - y0
-            # D6: stub proporzionale alla dimensione del componente e alla scala del disegno.
-            # min(w,h)*0.5 raggiunge il bordo del cluster dal centro; scale è il floor.
-            stub = max(self.stub_length, min(w, h) * 0.5, scale)
 
-            # 4 punti cardinali (centri dei lati)
-            pin_candidates = [
-                ("1", (x0, (y0 + y1) / 2)),  # sinistra
-                ("2", (x1, (y0 + y1) / 2)),  # destra
-                ("3", ((x0 + x1) / 2, y0)),  # sopra
-                ("4", ((x0 + x1) / 2, y1)),  # sotto
-            ]
-            for pin_name, pin_pos in pin_candidates:
-                best_net = self._find_net_with_stub(pin_pos, stub)
-                if best_net is not None:
-                    pin = PinNode(
-                        pin_id=f"{comp.node_id}_{pin_name}",
-                        pin_name=pin_name,
-                        position=pin_pos,
-                        connected_net=best_net.net_id,
-                    )
-                    comp.pins.append(pin)
-                    self.graph.add_edge(comp.node_id, best_net.net_id, pin=pin)
+            pins = self.select_pins(comp.cluster)
+            for i, (px, py) in enumerate(pins):
+                pin_node = PinNode(pin_id=f"{comp.node_id}_{i+1}", position=(px, py))
+                net_id = self._find_nearest_net(px, py, pin_tol)
+                pin_node.connected_net = net_id
+                comp.pins.append(pin_node)
 
-    def _find_net_with_stub(
-        self, pin_pos: tuple[float, float], stub_len: float
-    ) -> NetNode | None:
-        """Estende uno stub dal pin e cerca un net che interseca."""
-        # 4 direzioni ortogonali
-        directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
-        best_net = None
-        best_dist = float("inf")
+                if net_id:
+                    self.graph.add_edge(comp.node_id, net_id, pin_id=pin_node.pin_id)
 
-        for dx, dy in directions:
-            stub_end = (pin_pos[0] + dx * stub_len, pin_pos[1] + dy * stub_len)
-            stub = PDFSegment(start=pin_pos, end=stub_end, item_type="line")
-
-            for net in self.nets.values():
-                for seg in net.segments:
-                    if self._segments_intersect(stub, seg):
-                        dist = ((pin_pos[0] - seg.midpoint()[0]) ** 2 +
-                                (pin_pos[1] - seg.midpoint()[1]) ** 2) ** 0.5
-                        if dist < best_dist:
-                            best_dist = dist
-                            best_net = net
-
-        return best_net
 
     @staticmethod
     def _segments_intersect(a: PDFSegment, b: PDFSegment) -> bool:

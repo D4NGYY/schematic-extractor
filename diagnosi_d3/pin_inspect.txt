@@ -1,0 +1,45 @@
+[R45]
+- bbox: (181.9199981689453, 342.3999938964844, 202.0800018310547, 362.55999755859375)
+- center: (192.00, 352.48)
+- 6 free_endpoints:
+  - pin 0: (197.28, 357.76) -> nearest_seg dist=19.32, seg_start=(139.56, 377.08), seg_end=(211.68, 377.08), len=72.12
+  - pin 1: (194.88, 361.60) -> nearest_seg dist=15.48, seg_start=(139.56, 377.08), seg_end=(211.68, 377.08), len=72.12
+  - pin 2: (191.52, 351.52) -> nearest_seg dist=25.56, seg_start=(139.56, 377.08), seg_end=(211.68, 377.08), len=72.12
+  - pin 3: (190.08, 352.96) -> nearest_seg dist=24.12, seg_start=(139.56, 377.08), seg_end=(211.68, 377.08), len=72.12
+  - pin 4: (192.00, 352.48) -> nearest_seg dist=24.60, seg_start=(139.56, 377.08), seg_end=(211.68, 377.08), len=72.12
+  - pin 5: (199.68, 351.04) -> nearest_seg dist=26.04, seg_start=(139.56, 377.08), seg_end=(211.68, 377.08), len=72.12
+- Nearest overall: pin 1, dist=15.48pt
+- Distribuzione: 0 pin <5pt, 0 pin 5-15pt, 6 pin 15-30pt, 0 pin >30pt
+
+[U25]
+- bbox: (547.6799926757812, 438.6400146484375, 628.0800170898438, 461.32000732421875)
+- center: (587.88, 449.98)
+- 16 free_endpoints:
+  - pin 0: (607.92, 445.84) -> nearest_seg dist=65.11, seg_start=(645.00, 499.36), seg_end=(645.00, 545.56), len=46.20
+  - pin 1: (614.64, 447.76) -> nearest_seg dist=59.87, seg_start=(645.00, 499.36), seg_end=(645.00, 545.56), len=46.20
+  - pin 2: (547.68, 445.84) -> nearest_seg dist=17.02, seg_start=(541.44, 410.80), seg_end=(541.44, 430.00), len=19.20
+  - pin 3: (554.52, 447.76) -> nearest_seg dist=22.06, seg_start=(541.44, 410.80), seg_end=(541.44, 430.00), len=19.20
+  - pin 4: (583.80, 445.84) -> nearest_seg dist=45.22, seg_start=(541.44, 410.80), seg_end=(541.44, 430.00), len=19.20
+  - pin 5: (590.52, 447.76) -> nearest_seg dist=52.19, seg_start=(541.44, 410.80), seg_end=(541.44, 430.00), len=19.20
+  - pin 6: (595.92, 445.84) -> nearest_seg dist=56.74, seg_start=(541.44, 410.80), seg_end=(541.44, 430.00), len=19.20
+  - pin 7: (602.64, 447.76) -> nearest_seg dist=63.72, seg_start=(541.44, 410.80), seg_end=(541.44, 430.00), len=19.20
+  - pin 8: (559.80, 445.84) -> nearest_seg dist=24.25, seg_start=(541.44, 410.80), seg_end=(541.44, 430.00), len=19.20
+  - pin 9: (566.52, 447.76) -> nearest_seg dist=30.73, seg_start=(541.44, 410.80), seg_end=(541.44, 430.00), len=19.20
+  - pin 10: (571.80, 445.84) -> nearest_seg dist=34.24, seg_start=(541.44, 410.80), seg_end=(541.44, 430.00), len=19.20
+  - pin 11: (578.52, 447.76) -> nearest_seg dist=41.11, seg_start=(541.44, 410.80), seg_end=(541.44, 430.00), len=19.20
+  - pin 12: (618.48, 456.52) -> nearest_seg dist=50.38, seg_start=(645.00, 499.36), seg_end=(645.00, 545.56), len=46.20
+  - pin 13: (628.08, 456.52) -> nearest_seg dist=46.06, seg_start=(645.00, 499.36), seg_end=(645.00, 545.56), len=46.20
+  - pin 14: (606.48, 456.52) -> nearest_seg dist=57.61, seg_start=(645.00, 499.36), seg_end=(645.00, 545.56), len=46.20
+  - pin 15: (616.08, 456.52) -> nearest_seg dist=51.69, seg_start=(645.00, 499.36), seg_end=(645.00, 545.56), len=46.20
+- Nearest overall: pin 2, dist=17.02pt
+- Distribuzione: 0 pin <5pt, 0 pin 5-15pt, 3 pin 15-30pt, 13 pin >30pt
+
+[R28]
+- bbox: (528.47998046875, 284.55999755859375, 551.0399780273438, 309.6400146484375)
+- center: (539.76, 297.10)
+- 2 free_endpoints:
+  - pin 0: (540.00, 307.24) -> nearest_seg dist=18.69, seg_start=(305.16, 328.84), seg_end=(693.12, 324.04), len=387.99
+  - pin 1: (543.84, 300.04) -> nearest_seg dist=19.37, seg_start=(563.16, 287.92), seg_end=(563.16, 298.60), len=10.68
+- Nearest overall: pin 0, dist=18.69pt
+- Distribuzione: 0 pin <5pt, 0 pin 5-15pt, 2 pin 15-30pt, 0 pin >30pt
+

@@ -207,6 +207,38 @@ class SpatialClusterer:
         return angle <= tol_deg or angle >= (90.0 - tol_deg)
 
     @staticmethod
+    def free_endpoints(segments: list[PDFSegment]) -> list[tuple[float, float]]:
+        counts: dict[tuple[float, float], int] = defaultdict(int)
+        for s in segments:
+            counts[s.start] += 1
+            counts[s.end] += 1
+        return [pt for pt, c in counts.items() if c == 1]
+
+    @staticmethod
+    def recover_stub_wires(
+        clusters: list[ComponentCluster],
+        wire_segs: list[PDFSegment],
+        min_samples: int = 2,
+    ) -> list[PDFSegment]:
+        recovered: list[PDFSegment] = []
+        for cluster in clusters:
+            free = set(SpatialClusterer.free_endpoints(cluster.segments))
+            if not free:
+                continue
+            to_remove = []
+            for s in cluster.segments:
+                if SpatialClusterer._is_axis_aligned(s) and (s.start in free or s.end in free):
+                    to_remove.append(s)
+
+            if len(cluster.segments) - len(to_remove) + len(cluster.shapes) >= min_samples:
+                for s in to_remove:
+                    cluster.segments.remove(s)
+                    recovered.append(s)
+        wire_segs.extend(recovered)
+        print(f"DEBUG: recover_stub_wires recovered {len(recovered)} segments")
+        return recovered
+
+    @staticmethod
     def separate_wires(
         segments: list[PDFSegment],
         factor: float = 3.0,

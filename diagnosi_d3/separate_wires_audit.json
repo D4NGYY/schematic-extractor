@@ -1,0 +1,17 @@
+{
+  "pre_clustering": {
+    "total_segments": 546,
+    "pct_axis_aligned": 16.666666666666664,
+    "pct_curve": 51.28205128205128,
+    "p50_length": 6.872525975368465
+  },
+  "post_separate_wires": {
+    "wire_segs_count": 20,
+    "symbol_segs_count": 246,
+    "symbol_segs_axis_aligned_and_short": 63
+  },
+  "post_clustering": {
+    "absorbed_segments_count": 0,
+    "absorbed_details": []
+  }
+}

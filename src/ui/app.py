@@ -43,19 +43,21 @@ def main() -> None:
         help="Override della distanza di linkage del clustering. 0 usa il p60 adattivo data-derived.",
     )
     link_dist = None if ld_raw == 0.0 else ld_raw
+    show_pins = st.sidebar.checkbox("Mostra pin candidati (giallo)", value=True)
 
     with st.spinner("Costruzione grafo e overlay..."):
-        res = build_overlay(str(pdf), dpi=dpi, link_dist=link_dist)
+        res = build_overlay(str(pdf), dpi=dpi, link_dist=link_dist, show_pins=show_pins)
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Componenti", res.components)
     c2.metric("Net", res.nets)
     c3.metric("Edges", res.edges)
     c4.metric("Isolati", res.isolated, delta=-res.isolated, delta_color="inverse")
+    c5.metric("Pin candidati", res.pins)
 
     st.caption(
         f"link_dist = {res.link_dist if res.link_dist is not None else 'adattivo (p60)'} · "
-        "verde = componente connesso a >=1 net · rosso = isolato · blu = segmenti net"
+        "verde = connesso a >=1 net · rosso = isolato · blu = segmenti net · giallo = pin candidati (free-endpoint)"
     )
     st.image(res.image, use_container_width=True)
 
