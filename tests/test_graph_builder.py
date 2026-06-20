@@ -739,6 +739,19 @@ class TestMergeNetsByLabel:
         b._merge_nets_by_label(labels, tol=5.0)
         assert len(b.nets) == 2  # pin numbers must not merge distinct nets
 
+    def test_label_beyond_tol_does_not_merge(self) -> None:
+        # Labels float off their wire stub; if tol is too small the label finds
+        # no net and the merge silently no-ops. This is why label_tol_factor must
+        # be generous (real GND labels sit ~5x wire_tol from the stub).
+        b = self._builder_with_two_nets()
+        # symbol_center is at x+5; nets span [x, x+10]. Place labels far away.
+        far = [self._label("GND", 500.0), self._label("GND", 700.0)]
+        b._merge_nets_by_label(far, tol=5.0)
+        assert len(b.nets) == 2  # out of reach → no merge
+
+    def test_label_tol_factor_is_stored(self) -> None:
+        assert BipartiteGraphBuilder(label_tol_factor=6.0).label_tol_factor == 6.0
+
 
 class TestPinTolScale:
     """pin_tol must scale with the characteristic stub length, not the tiny

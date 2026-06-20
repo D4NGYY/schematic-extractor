@@ -66,6 +66,7 @@ class BipartiteGraphBuilder:
         stub_length: float = 3.0,  # px
         cluster_eps: float | None = None,
         pin_tol_factor: float = 2.0,  # pin reach ≈ pin_tol_factor × characteristic stub length
+        label_tol_factor: float = 6.0,  # label→net reach ≈ factor × wire_tol (labels float off the stub)
     ) -> None:
         self.classifier = classifier or ComponentClassifier()
         self.rule_classifier = RuleBasedClassifier()  # B1: attivo finché ML non è addestrato
@@ -73,6 +74,7 @@ class BipartiteGraphBuilder:
         self.stub_length = stub_length
         self.cluster_eps = cluster_eps  # override link_dist del clustering (None = adattivo)
         self.pin_tol_factor = pin_tol_factor
+        self.label_tol_factor = label_tol_factor
         self.graph = nx.Graph()
         self.components: dict[str, ComponentNode] = {}
         self.nets: dict[str, NetNode] = {}
@@ -88,7 +90,6 @@ class BipartiteGraphBuilder:
 
         # 1. Clustering spaziale: SOLO symbol-primitive
         clusterer = SpatialClusterer(eps=self.cluster_eps)
-        page_shape = (getattr(page, "width", 1000), getattr(page, "height", 1000))
         clusters = clusterer.cluster(symbol_segs, page.shapes, text_blocks=page.text_blocks)
 
         # 2. Associazione testo
@@ -117,7 +118,7 @@ class BipartiteGraphBuilder:
         # RESET…) sono un'unica net elettrica, come negli schematici si uniscono
         # per nome e non solo per filo. Eseguito PRIMA di connettere i pin.
         label_tol = self._derive_wire_tol(self._all_wire_segs())
-        self._merge_nets_by_label(net_labels, tol=3.0 * label_tol)
+        self._merge_nets_by_label(net_labels, tol=self.label_tol_factor * label_tol)
 
         # 5. Pin-point matching: connetti pin ai nets
         self._connect_pins_to_nets(scale)
