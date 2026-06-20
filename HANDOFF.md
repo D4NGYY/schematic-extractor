@@ -5,6 +5,16 @@ _Complete handoff to resume this project from any point. Last updated: 2026-06-2
 ---
 
 ## 0. TL;DR (resume in 30 seconds)
+
+> **CURRENT STATE (2026-06-20, latest) — WORKING HYBRID SYSTEM, SEALED.**
+> Pipeline: vector PDF → geometric extraction (+OCR fallback for text-less PDFs) → bipartite Components↔Nets graph → **YOLO component detector with geometric fallback** → SPICE/KiCad/JSON export → LLM tool-calling query layer (qwen2.5:7b).
+> **Net-connectivity F1 (same-board honest delta, 32 real boards): geometric 0.42 → hybrid detector 0.56 (+0.13).** Detector wins on ~20/32 boards (bus_pci +0.50, esvideo +0.58, sonde +0.37, xilinx +0.33); the geometric fallback guarantees no regression on the boards YOLO can't see. **228 tests green, ruff clean.** Branch `feat/wire-symbol-separation`, all committed.
+> **The "make it actually work" goal is MET.** Remaining floor (electric gt=97, graphic gt=34, muxdata, rams) is an intrinsic small-symbol/ultra-dense limit — probed: imgsz 2048 doesn't move it (§25/§26). **Only optional lever left = SAHI tiling** (documented, not a blocker). Public release (§10) remains a separate later milestone.
+> Detector: `src/ml/detector_source.py` + `build_from_page(detector_components=...)` + hybrid gate; dataset `scripts/build_detector_dataset.py` (auto-labeled from KiCad, zero manual); eval `diagnosi_d3/compare_detector.py --hybrid`. Production config = **150-dpi weights + hybrid + container exclusion** (250-dpi gave no systematic gain, §25). See §22–§26.
+
+---
+
+### Original TL;DR (historical, pre-detector)
 Turns schematic PDFs into a queryable **Components↔Nets** graph (export SPICE / KiCad / JSON), with an LLM as the final tool-calling layer. Extraction is geometric (vector layer); an **OCR fallback** (RapidOCR, optional `[ocr]` extra) kicks in for text-less CAD-export PDFs. Branch `feat/wire-symbol-separation`, committed locally. Test suite **green (210 passed)**. Phase 5 (LLM tool calling) **debugged end-to-end against real Ollama** — qwen2.5:7b winner (25/25), single default (§15). Net connectivity improved over the last sessions (§3): scale-based `pin_tol` fix (micro **F1 0.21 → 0.36**), `#PWR` GT honesty, `label_tol_factor=6` net merge. **OCR fallback this session** unblocked text-less PDFs: **arduino_nano F1 0.03 → 0.16** (refs 0 → 12). **Root-caused the F1 ceiling (§3):** it is a **ref→cluster collision** (45 GT ref-texts collapse onto 24 clusters → 24 refs lost); two targeted fixes both regress F1 — the real cure is geometric re-segmentation (large). **Cold-review finding (§1e, 2026-06-20):** re-run on Python 3.10 reproduced nano-OCR exactly (0.159) but micro moved 0.356→0.344 — **the metric is interpreter-fragile and rests on 2 boards; don't over-optimize it.** Shipped dataset-expansion tooling (§18) to render N real boards via `kicad-cli` (runs on the user's Windows machine). End goal: **public portfolio release** (§10).
 
 ---
@@ -33,7 +43,7 @@ The F1 baseline was **re-run on a clean Linux/Python-3.10 interpreter** (deps pi
 ## 2. Current status (snapshot)
 - **Branch:** `feat/wire-symbol-separation` — committed locally (push status: local).
 - **Pipeline (latest on branch):** V7 text-guided clustering, V5/V6 T-/dot-junction fixes, KiCad GT parser, Phase 5 LLM layer, GT honesty + label-based net merging + scale-based pin_tol, **OCR fallback for text-less PDFs** (this session).
-- **Tests:** **210 passed** (`uv run python -m pytest -q`). ruff + mypy clean on `src/core/ocr_fallback.py`, `src/core/pdf_parser.py`, `src/core/graph_builder.py`, `src/llm/`. (Legacy lint in `app.py`/`kicad_gt_reader.py` left untouched.)
+- **Tests:** **228 passed** (was 210; +detector/recall/hybrid suites). (`uv run python -m pytest -q`). ruff + mypy clean on `src/core/ocr_fallback.py`, `src/core/pdf_parser.py`, `src/core/graph_builder.py`, `src/llm/`. (Legacy lint in `app.py`/`kicad_gt_reader.py` left untouched.)
 - **F1 (GT-measured, `PYTHONHASHSEED=0` for stable greedy tie-break):** arduino_micro **0.356** (overlap 24/48), arduino_nano **0.159** (overlap 10/34, was 0.03 pre-OCR).
 - **Bryston page 0 graph:** 13 components · 119 nets · 53 edges · **0 isolated**. Adaptive link_dist ≈ 8.25pt.
 
@@ -318,3 +328,9 @@ Retrained YOLO on `data/detector250` (2924×2067 page-0 images) at `--imgsz 1536
 - Dense/tiny-symbol boards still floor at the geometric fallback: muxdata 0.140, rams 0.043, electric 0.277, graphic 0.194, interf_u 0.483 (all [FALLBACK]). 250-dpi did help a few via better training crops (bus_pci 0.121→0.625, arduino_micro→0.690, ecc83_v2→0.762, pspice→0.750) but a couple regressed (kit-dev −0.05).
 - **Conclusion:** the 250-dpi dataset is NOT worth keeping as the default (no systematic gain, heavier). The lever for small symbols on ultra-dense pages is **tiling / SAHI** (run inference on full-res crops so each symbol is a larger fraction of the tile) or a drastically higher `--imgsz` (OOM risk on 8 GB). Both are OPTIONAL polish concentrated on a few huge boards (electric gt=97, graphic gt=34).
 - **State = a working hybrid system:** detector wins on ~20/32 boards (big: bus_pci +0.50, esvideo +0.58, sonde +0.37, xilinx +0.33), geometric fallback guarantees no crashes, net mean 0.555 + LLM layer on top. This is "actually works" for the realistic majority; muxdata/rams are a genuinely-hard repetitive-bus tail.
+
+## 26. imgsz=2048 probe + PRODUCTION DECISION (2026-06-20) — SEALED
+Cheap probe before building SAHI: re-ran detector inference at `imgsz=2048` (existing 150-dpi weights; Ultralytics allows infer-imgsz ≠ train-imgsz). **electric 0.277==0.277, graphic 0.194==0.194 — unchanged, still hybrid-fallback.** Higher inference resolution does NOT recover the ultra-dense boards → **the floor is intrinsic** to running whole-image YOLO on planimetric pages, not a tunable. (Caveat: probe used 1536-trained weights; a 2048-trained model might differ marginally, but the signal is clear and OOM-risky on 8 GB.)
+- **DECISION: consolidate and ship the hybrid as-is.** Production config: **150-dpi detector weights + `--hybrid` (geometric fallback when detector covers <50% of page refs) + container exclusion**. Robust (no crashes), mean ~0.56, detector winning on the realistic majority.
+- **Only remaining optional lever = SAHI / tiling** (slice the page into full-res tiles, infer per tile so small symbols are a larger fraction, merge boxes via NMS, feed `DetectorComponentSource`). Concentrated payoff on a few huge boards (electric, graphic). NOT a blocker; build only if those specific boards matter. The `DetectorComponentSource` integration is already tiling-ready (it just consumes a list of `Detection` boxes — a SAHI front-end would produce that list).
+- muxdata/rams (gt=5/8, repetitive bus arrays) floor at ~0.04–0.14 even geometrically → genuinely-hard tail, likely unfixable by detection alone.
