@@ -70,10 +70,10 @@ def main() -> None:
         # Chat Sidebar settings
         st.sidebar.markdown("---")
         st.sidebar.subheader("Impostazioni Chat")
-        model = st.sidebar.selectbox(
-            "Modello", 
-            ["qwen2.5:7b-instruct-q4_K_M", "llama3.1:8b-instruct-q4_K_M", "mistral:7b-instruct-v0.3-q4_K_M", "gpt-4o"]
-        )
+        from src.llm.agent import DEFAULT_MODEL
+        # DEFAULT_MODEL (benchmark winner) is listed first => selectbox default.
+        _models = [DEFAULT_MODEL, "llama3.1:8b-instruct-q4_K_M", "mistral:7b-instruct-v0.3-q4_K_M", "gpt-4o"]
+        model = st.sidebar.selectbox("Modello", list(dict.fromkeys(_models)))
         max_iters = st.sidebar.slider("Max iterazioni", 1, 20, 10)
         mock_mode = st.sidebar.checkbox("Mock Mode (No Ollama)", value=True)
         

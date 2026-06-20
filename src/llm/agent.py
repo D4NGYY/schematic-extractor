@@ -9,6 +9,19 @@ from src.llm.tools import TOOLS_SCHEMA, GraphContext
 
 logger = structlog.get_logger("agent")
 
+# Default tool-calling model: winner of the 5-query Bryston benchmark
+# (qwen2.5 scored 25/25, 5/5 queries, avg 3.24s — see diagnosi_d3/benchmark_llm.py).
+DEFAULT_MODEL = "qwen2.5:7b-instruct-q4_K_M"
+
+# Derived from TOOLS_SCHEMA: valid tool names and their ordered parameter names.
+# Used by the ReAct fallback parser to recognise text-form tool calls while
+# staying gated on real tool names (avoids false positives in prose).
+_VALID_TOOLS = {t["function"]["name"] for t in TOOLS_SCHEMA}
+_TOOL_PARAMS = {
+    t["function"]["name"]: list(t["function"]["parameters"].get("properties", {}).keys())
+    for t in TOOLS_SCHEMA
+}
+
 class LLMClient:
     """Abstract interface for LLM clients."""
     async def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> Any:
@@ -17,7 +30,7 @@ class LLMClient:
 
 class OllamaClient(LLMClient):
     """Ollama client using OpenAI SDK compatibility layer."""
-    def __init__(self, model: str = "llama3.1:8b-instruct-q4_K_M"):
+    def __init__(self, model: str = DEFAULT_MODEL):
         self.model = model
         self.client = openai.AsyncOpenAI(
             base_url="http://localhost:11434/v1",
@@ -44,8 +57,7 @@ class MockClient(LLMClient):
 
     async def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> Any:
         self.call_count += 1
-        # Simple mock logic based on the last message
-        last_msg = messages[-1]["content"] if messages[-1].get("content") else ""
+        # Simple mock logic: first turn calls a tool, second turn answers.
 
         class MockMessage:
             def __init__(self, content: str | None, tool_calls: list[Any] | None = None) -> None:
@@ -81,22 +93,26 @@ class SchematicAgent:
         self.llm_client = llm_client
         self.max_iterations = max_iterations
         self.system_prompt = (
-            "You are a schematic AI reasoner. Use the provided tools to answer questions "
-            "about the schematic graph. Be concise and technical. Always cite component refs "
-            "in your answers.\n"
-            "Llama 3.1 function calling can be unreliable; dual-mode parsing handles both native "
-            "tool_calls and ReAct-style text output. This makes the agent robust to model quirks "
-            "without coupling to a specific backend. If you want to call a tool, you can either use "
-            "the native tool call format, or output the text exactly like:\n"
-            "TOOL_CALL: tool_name({\"arg1\": \"val1\"})\n"
+            "You are a schematic AI reasoner answering questions about a Components<->Nets "
+            "graph. You MUST base every answer on tool results — never invent components, "
+            "nets, values or connections. Reply in the user's language, be concise and "
+            "technical, and cite the exact component/net refs returned by the tools.\n"
+            "To use a tool, PREFER the native function-calling format. If your backend cannot, "
+            "fall back to a single line, exactly:\n"
+            "TOOL_CALL: tool_name({\"arg\": \"value\"})\n"
+            "Call one tool at a time, then read its JSON result before answering. If a tool "
+            "returns an error or empty result, report that honestly instead of guessing."
         )
 
     def _execute_tool(self, name: str, arguments_str: str) -> str:
         """Executes a tool on GraphContext and returns the JSON result string."""
         try:
-            kwargs = json.loads(arguments_str)
+            kwargs = json.loads(arguments_str) if arguments_str.strip() else {}
         except json.JSONDecodeError:
             return '{"error": "Malformed JSON arguments"}'
+
+        if not isinstance(kwargs, dict):
+            return json.dumps({"error": "Arguments must be a JSON object, e.g. {\"arg\": \"value\"}"})
 
         method = getattr(self.graph_context, name, None)
         if not method:
@@ -109,13 +125,50 @@ class SchematicAgent:
             logger.error("tool_execution_failed", tool=name, error=str(e))
             return json.dumps({"error": str(e)})
 
+    def _positional_to_json(self, name: str, inner: str) -> str:
+        """Maps positional args (e.g. get_path("RF1", "R37")) to a JSON object
+        using the parameter order declared in TOOLS_SCHEMA."""
+        params = _TOOL_PARAMS.get(name, [])
+        raw = [v.strip().strip("'\"") for v in inner.split(",") if v.strip()]
+        return json.dumps(dict(zip(params, raw, strict=False)))
+
     def _parse_react_tool_call(self, text: str) -> tuple[str, str] | None:
-        """Parses a ReAct-style tool call from text. Returns (name, args_json)."""
-        pattern = r"TOOL_CALL:\s*([a-zA-Z0-9_]+)\((.*?)\)"
-        match = re.search(pattern, text, re.DOTALL)
-        if match:
-            return match.group(1), match.group(2)
-        return None
+        """Parses a text-form tool call across the formats local models emit.
+        Returns (name, args_json). Gated on valid tool names to avoid matching
+        prose. Handles three observed shapes:
+          A) {"name": "tool", "arguments": {...}}
+          B) tool_name({...}) / tool_name {...}   (object args, possibly prefixed)
+          C) tool_name("a", "b")                  (positional args)
+        """
+        # Strategy A: explicit name/arguments JSON envelope.
+        name_m = re.search(r'"name"\s*:\s*"([a-zA-Z0-9_]+)"', text)
+        if name_m and name_m.group(1) in _VALID_TOOLS:
+            name = name_m.group(1)
+            args_m = re.search(r'"(?:arguments|parameters)"\s*:\s*(\{.*?\})', text, re.DOTALL)
+            return name, args_m.group(1) if args_m else "{}"
+
+        # Strategy B/C: locate the earliest valid tool name mentioned, then read
+        # whichever comes first after it — an object {...} or a (positional) list.
+        present = sorted((text.find(n), n) for n in _VALID_TOOLS if n in text)
+        if not present:
+            return None
+        name = present[0][1]
+        rest = text[text.find(name) + len(name):]
+
+        obj_m = re.search(r"\{.*?\}", rest, re.DOTALL)
+        pos_m = re.search(r"\(\s*([^){}]*?)\s*\)", rest, re.DOTALL)
+        candidates: list[tuple[int, str, str]] = []
+        if obj_m:
+            candidates.append((obj_m.start(), "obj", obj_m.group(0)))
+        if pos_m:
+            candidates.append((pos_m.start(), "pos", pos_m.group(1)))
+        if not candidates:
+            return None
+        candidates.sort()
+        _, kind, payload = candidates[0]
+        if kind == "obj":
+            return name, payload
+        return name, self._positional_to_json(name, payload)
 
     async def query(self, user_question: str) -> str:
         """Runs the agent loop to answer a user question."""

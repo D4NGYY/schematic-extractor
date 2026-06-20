@@ -1,6 +1,8 @@
-import pytest
 import networkx as nx
+import pytest
+
 from src.llm.tools import GraphContext
+
 
 @pytest.fixture
 def sample_graph() -> nx.Graph:
@@ -11,23 +13,23 @@ def sample_graph() -> nx.Graph:
     g.add_node("n3", type="component", ref="C1", value="100nF", class_name="Capacitor")
     g.add_node("n4", type="component", ref="R2", value="1k", class_name="Resistor")
     g.add_node("n_iso", type="component", ref="ISO1", value="None", class_name="Unknown")
-    
+
     # Nets
     g.add_node("net1", type="net", name="VCC")
     g.add_node("net2", type="net", name="GND")
     g.add_node("net3", type="net", name="N1")
-    
+
     # Edges
     g.add_edge("n1", "net1", pin="1")
     g.add_edge("n1", "net3", pin="2")
-    
+
     g.add_edge("n2", "net1", pin="8")
     g.add_edge("n2", "net2", pin="4")
     g.add_edge("n2", "net3", pin="3")
-    
+
     g.add_edge("n3", "net3", pin="1")
     g.add_edge("n3", "net2", pin="2")
-    
+
     return g
 
 @pytest.fixture
@@ -42,18 +44,18 @@ def test_get_neighbors(context: GraphContext) -> None:
     assert "N1" in res["connected_nets"]
     assert "U1" in res["connected_components"]
     assert "C1" in res["connected_components"]
-    
+
 def test_get_path(context: GraphContext) -> None:
     res = context.get_path("R1", "GND") # Wait, GND is a net, the prompt says component to component
     res = context.get_path("R1", "R2")
     assert res["found"] is False
-    
+
     res = context.get_path("R1", "C1")
     assert res["found"] is True
     assert res["start"] == "R1"
     assert res["end"] == "C1"
     assert "N1" in res["path"] or "VCC" in res["path"]
-    
+
 def test_get_net_components(context: GraphContext) -> None:
     res = context.get_net_components("VCC")
     assert "error" not in res
@@ -80,7 +82,67 @@ def test_search_by_value(context: GraphContext) -> None:
     res = context.search_by_value("10k")
     assert res["count"] == 1
     assert res["matches"][0]["ref"] == "R1"
-    
+
     res = context.search_by_value(".*F") # Match 100nF
     assert res["count"] == 1
     assert res["matches"][0]["ref"] == "C1"
+
+
+# --- Real graph schema (graph_builder uses bipartite=0/1 + pin_id, NOT type=/pin=) ---
+
+@pytest.fixture
+def real_graph() -> nx.Graph:
+    """Mirrors the schema emitted by BipartiteGraphBuilder.build_from_page:
+    components carry bipartite=0, nets carry bipartite=1, edges carry pin_id."""
+    g = nx.Graph()
+    g.add_node("c_r1", bipartite=0, ref="R1", value="10k", class_name="resistor")
+    g.add_node("c_u1", bipartite=0, ref="U1", value="LM358", class_name="unknown")
+    g.add_node("c_iso", bipartite=0, ref="X1", value="None", class_name="unknown")
+    g.add_node("N1", bipartite=1, net_id="N1", name="Net-1")
+    g.add_node("N2", bipartite=1, net_id="N2", name="Net-2")
+    g.add_edge("c_r1", "N1", pin_id="1")
+    g.add_edge("c_u1", "N1", pin_id="3")
+    g.add_edge("c_u1", "N2", pin_id="4")
+    return g
+
+
+@pytest.fixture
+def real_context(real_graph: nx.Graph) -> GraphContext:
+    return GraphContext(real_graph)
+
+
+def test_real_schema_components_discovered(real_context: GraphContext) -> None:
+    # Regression: GraphContext must recognize bipartite=0/1, not only type=.
+    assert set(real_context.components.keys()) == {"R1", "U1", "X1"}
+    assert "Net-1" in real_context.nets
+
+
+def test_real_schema_get_neighbors(real_context: GraphContext) -> None:
+    res = real_context.get_neighbors("R1")
+    assert "error" not in res
+    assert "Net-1" in res["connected_nets"]
+    assert "U1" in res["connected_components"]
+
+
+def test_real_schema_get_net_components_reads_pin_id(real_context: GraphContext) -> None:
+    res = real_context.get_net_components("Net-1")
+    assert res["num_components"] == 2
+    pins = {c["ref"]: c["pin"] for c in res["components"]}
+    assert pins["R1"] == "1"  # must come from pin_id, not "unknown"
+
+
+def test_real_schema_find_isolated(real_context: GraphContext) -> None:
+    res = real_context.find_isolated()
+    assert res["isolated_components"] == ["X1"]
+    assert res["count"] == 1
+
+
+def test_get_nets_summary(real_context: GraphContext) -> None:
+    res = real_context.get_nets_summary(min_components=2)
+    assert res["count"] == 1
+    assert res["nets"][0]["net"] == "Net-1"
+    assert res["nets"][0]["num_components"] == 2
+    assert set(res["nets"][0]["components"]) == {"R1", "U1"}
+
+    res_all = real_context.get_nets_summary(min_components=1)
+    assert res_all["count"] == 2  # Net-1 and Net-2

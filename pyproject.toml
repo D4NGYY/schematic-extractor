@@ -70,6 +70,10 @@ ignore = ["E501"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.ruff.lint.per-file-ignores]
+# Typer requires function calls (typer.Option/Argument) in argument defaults.
+"src/cli/*.py" = ["B008"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

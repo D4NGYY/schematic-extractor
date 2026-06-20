@@ -1,0 +1,339 @@
+{
+  "pdf": "test_input/bryston_schematic.pdf",
+  "models": {
+    "qwen2.5:7b-instruct-q4_K_M": {
+      "results": [
+        {
+          "query_id": "Q1",
+          "query": "Quali componenti sono isolati?",
+          "tool_trace": [
+            [
+              "find_isolated",
+              "{}"
+            ]
+          ],
+          "answer": "I componenti isolati sono RB14, R45 e DX7. Totale: 3 componenti.",
+          "elapsed_s": 9.95,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q2",
+          "query": "Elenca i componenti collegati a WB1",
+          "tool_trace": [
+            [
+              "get_neighbors",
+              "{\"component_ref\":\"WB1\"}"
+            ]
+          ],
+          "answer": "I componenti collegati a WB1 sono RB10 e PR2. La risposta è stato fornito dai nastri di connessione di WB1, inclusi i nodi di terza parte e i reticolati dei componenti.",
+          "elapsed_s": 1.62,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q3",
+          "query": "Trova il path che collega RF1 a R37",
+          "tool_trace": [
+            [
+              "get_path",
+              "{\"start_ref\":\"RF1\",\"end_ref\":\"R37\"}"
+            ]
+          ],
+          "answer": "Il percorso che collega RF1 a R37 è il seguente: RF1 -> Net-81 -> R37. Ci sono solo due componenti nel percorso, inclusi i due endpoint.",
+          "elapsed_s": 1.62,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q4",
+          "query": "Cerca i componenti con valore 10k",
+          "tool_trace": [
+            [
+              "search_by_value",
+              "{\"pattern\":\"10k\"}"
+            ]
+          ],
+          "answer": "Sono stati trovati due componenti con valore 10k: WB1 e D1.",
+          "elapsed_s": 1.22,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q5",
+          "query": "Quali net collegano almeno 2 componenti?",
+          "tool_trace": [
+            [
+              "get_nets_summary",
+              "{\"min_components\":2}"
+            ]
+          ],
+          "answer": "I seguenti net collegano almeno due componenti:\n\n- Net-6 che collega WB1 e PR2\n- Net-46 che collega WB1 e RB10\n- Net-81 che collega RF1 e R37\n\nIn totale sono 3 i net che soddisfano questa condizione.",
+          "elapsed_s": 1.81,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        }
+      ],
+      "total_score": 25,
+      "queries_passed": 5,
+      "avg_time_s": 3.24
+    },
+    "mistral:7b-instruct-v0.3-q4_K_M": {
+      "results": [
+        {
+          "query_id": "Q1",
+          "query": "Quali componenti sono isolati?",
+          "tool_trace": [
+            [
+              "find_isolated",
+              "{}"
+            ]
+          ],
+          "answer": "The isolated components in your circuit are: [\"RB14\", \"R45\", \"DX7\"]. These components have no connections to any net and thus, they are considered as isolates.",
+          "elapsed_s": 9.78,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q2",
+          "query": "Elenca i componenti collegati a WB1",
+          "tool_trace": [
+            [
+              "get_net_components",
+              "{\"net_name\": \"WB1\"}"
+            ]
+          ],
+          "answer": "I'm sorry for the confusion, but as per your observation, Net WB1 was not found in this schematic graph. So there are no components directly connected to Net WB1 at the moment.",
+          "elapsed_s": 1.9,
+          "timed_out": false,
+          "score": 1,
+          "checks": {
+            "correct_tool": false,
+            "correct_args": false,
+            "data_present": false,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q3",
+          "query": "Trova il path che collega RF1 a R37",
+          "tool_trace": [
+            [
+              "get_path",
+              "{\"start_ref\": \"RF1\", \"end_ref\": \"R37\"}"
+            ],
+            [
+              "get_component_info",
+              "{}"
+            ],
+            [
+              "get_component_info",
+              "{}"
+            ],
+            [
+              "get_component_info",
+              "{\"component_ref\": \"RF1\"}"
+            ]
+          ],
+          "answer": "Component RF1 is a `resistor` with the value `22R1`. Only one net (Net-81) is connected to this component. Here's the position of RF1 in coordinates:\n```\n[466.79998779296875, 285.5199890136719] (x, y)\n5.032248650488281, -5.438006458637696 (width/height)\n```",
+          "elapsed_s": 7.24,
+          "timed_out": false,
+          "score": 4,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": false,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q4",
+          "query": "Cerca i componenti con valore 10k",
+          "tool_trace": [
+            [
+              "search_by_value",
+              "{\"pattern\": \"10k\"}"
+            ]
+          ],
+          "answer": "Two components have a value with '10k': `WB1` (resistor) and `D1` (diode).",
+          "elapsed_s": 1.86,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q5",
+          "query": "Quali net collegano almeno 2 componenti?",
+          "tool_trace": [
+            [
+              "get_nets_summary",
+              "{\"min_components\": 2}"
+            ]
+          ],
+          "answer": "The nets that connect at least 2 components together are:\n\n1. Net-6 (wires 'WB1' and 'PR2')\n2. Net-46 (wires 'WB1' and 'RB10')\n3. Net-81 (wires 'RF1' and 'R37')",
+          "elapsed_s": 2.43,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        }
+      ],
+      "total_score": 20,
+      "queries_passed": 4,
+      "avg_time_s": 4.64
+    },
+    "llama3.1:8b-instruct-q4_K_M": {
+      "results": [
+        {
+          "query_id": "Q1",
+          "query": "Quali componenti sono isolati?",
+          "tool_trace": [
+            [
+              "find_isolated",
+              "{}"
+            ]
+          ],
+          "answer": "I componenti che risultano isolati sono: RB14, R45 e DX7. \n\nQuesta è la risposta basata sulle informazioni fornite dal tool chiamato in precedenza.",
+          "elapsed_s": 10.59,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q2",
+          "query": "Elenca i componenti collegati a WB1",
+          "tool_trace": [
+            [
+              "get_net_components",
+              "{\"net_name\":\"WB1\"}"
+            ]
+          ],
+          "answer": "Il progetto di scheda non risulta avere alcun componente collegato alla rete WB1, come riportato dalla funzione `get_net_components`.",
+          "elapsed_s": 1.64,
+          "timed_out": false,
+          "score": 1,
+          "checks": {
+            "correct_tool": false,
+            "correct_args": false,
+            "data_present": false,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q3",
+          "query": "Trova il path che collega RF1 a R37",
+          "tool_trace": [
+            [
+              "get_path",
+              "{\"start_ref\":\"RF1\",\"end_ref\":\"R37\"}"
+            ]
+          ],
+          "answer": "Il percorso che collega RF1 a R37 è: Net-81. Questo net funge da connettore tra i due componenti RF1 e R37, con lunghezza di 2 connessioni.",
+          "elapsed_s": 1.9,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q4",
+          "query": "Cerca i componenti con valore 10k",
+          "tool_trace": [
+            [
+              "search_by_value",
+              "{\"pattern\":\"10k\"}"
+            ]
+          ],
+          "answer": "I've found two components with a value of 10k:\n\n* WB1 (ref: WB1)  \n* D1 (ref: D1)  \n\nNote that the values include units, so it's specifically looking for resistors with an absolute value of 10000 ohms. The exact value may be slightly higher or lower due to tolerances not specified in the search result.)",
+          "elapsed_s": 2.17,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        },
+        {
+          "query_id": "Q5",
+          "query": "Quali net collegano almeno 2 componenti?",
+          "tool_trace": [
+            [
+              "get_nets_summary",
+              "{\"min_components\":\"2\"}"
+            ]
+          ],
+          "answer": "Il net che collegano almeno 2 componenti sono: Net-6, Net-46 e Net-81. In particolare, entrambi i componenti WB1 stanno su rete Net-6 e  Net-46 while RF1 e R37 si trovano sulla rete Net-81.",
+          "elapsed_s": 2.04,
+          "timed_out": false,
+          "score": 5,
+          "checks": {
+            "correct_tool": true,
+            "correct_args": true,
+            "data_present": true,
+            "clean_answer": true
+          }
+        }
+      ],
+      "total_score": 21,
+      "queries_passed": 4,
+      "avg_time_s": 3.67
+    }
+  },
+  "winner": "qwen2.5:7b-instruct-q4_K_M"
+}

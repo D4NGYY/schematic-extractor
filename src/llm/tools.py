@@ -1,25 +1,41 @@
-import json
 import re
+from typing import Any
+
 import networkx as nx
-from typing import Any, Dict
+
+
+def _is_component(data: dict[str, Any]) -> bool:
+    """True for component nodes in either schema (test fixtures use type=,
+    BipartiteGraphBuilder uses bipartite=0)."""
+    return data.get("type") == "component" or data.get("bipartite") == 0
+
+
+def _is_net(data: dict[str, Any]) -> bool:
+    """True for net nodes in either schema (type='net' or bipartite=1)."""
+    return data.get("type") == "net" or data.get("bipartite") == 1
+
+
+def _net_name(data: dict[str, Any], node: Any) -> str:
+    """Resolve a human-readable net name across both schemas."""
+    return data.get("name") or data.get("net_id") or str(node)
+
 
 class GraphContext:
     """Wraps the bipartite Components<->Nets networkx graph and exposes query methods."""
-    
+
     def __init__(self, graph: nx.Graph) -> None:
         self.graph = graph
         # Pre-compute some lookups for faster access
         self.components: dict[str, Any] = {}
         self.nets: dict[str, Any] = {}
         for node, data in self.graph.nodes(data=True):
-            node_type = data.get("type", "unknown")
-            if node_type == "component":
+            if _is_component(data):
                 # Assumes node_id or ref is the actual name
                 ref = data.get("ref", str(node))
                 self.components[ref] = {"node_id": node, **data}
-            elif node_type == "net":
+            elif _is_net(data):
                 # For nets, the node name might be the net_id or name
-                name = data.get("name") or str(node)
+                name = _net_name(data, node)
                 self.nets[name] = {"node_id": node, **data}
 
     def _get_comp_node(self, ref: str) -> str | None:
@@ -47,23 +63,23 @@ class GraphContext:
         node_id = self._get_comp_node(component_ref)
         if not node_id:
             return {"error": f"Component {component_ref} not found."}
-        
+
         connected_nets = []
         connected_components = set()
-        
+
         for neighbor in self.graph.neighbors(node_id):
             n_data = self.graph.nodes[neighbor]
-            if n_data.get("type") == "net":
-                net_name = n_data.get("name") or str(neighbor)
+            if _is_net(n_data):
+                net_name = _net_name(n_data, neighbor)
                 connected_nets.append(net_name)
                 # Find other components on this net
                 for net_neighbor in self.graph.neighbors(neighbor):
                     if net_neighbor != node_id:
                         nn_data = self.graph.nodes[net_neighbor]
-                        if nn_data.get("type") == "component":
+                        if _is_component(nn_data):
                             nn_ref = nn_data.get("ref", str(net_neighbor))
                             connected_components.add(nn_ref)
-                            
+
         return {
             "component": component_ref,
             "connected_nets": connected_nets,
@@ -74,12 +90,12 @@ class GraphContext:
         """Input: due ref componente. Output: {start, end, found, path, length}"""
         start_node = self._get_comp_node(start_ref)
         end_node = self._get_comp_node(end_ref)
-        
+
         if not start_node:
             return {"error": f"Start component {start_ref} not found."}
         if not end_node:
             return {"error": f"End component {end_ref} not found."}
-            
+
         try:
             path = nx.shortest_path(self.graph, source=start_node, target=end_node)
             # Map path nodes to readable names
@@ -90,7 +106,7 @@ class GraphContext:
                     readable_path.append(data.get("ref", str(n)))
                 else:
                     readable_path.append(data.get("name", str(n)))
-                    
+
             return {
                 "start": start_ref,
                 "end": end_ref,
@@ -112,19 +128,19 @@ class GraphContext:
         node_id = self._get_net_node(net_name)
         if not node_id:
             return {"error": f"Net {net_name} not found."}
-            
+
         components = []
         for neighbor in self.graph.neighbors(node_id):
             n_data = self.graph.nodes[neighbor]
-            if n_data.get("type") == "component":
-                # Find which pin is connected to this net
+            if _is_component(n_data):
+                # Find which pin is connected to this net (graph_builder uses pin_id)
                 edge_data = self.graph.get_edge_data(node_id, neighbor, {})
-                pin = edge_data.get("pin", "unknown")
+                pin = edge_data.get("pin_id") or edge_data.get("pin", "unknown")
                 components.append({
                     "ref": n_data.get("ref", str(neighbor)),
                     "pin": pin
                 })
-                
+
         return {
             "net": net_name,
             "components": components,
@@ -138,7 +154,7 @@ class GraphContext:
             node_id = data["node_id"]
             if self.graph.degree(node_id) == 0:
                 isolated.append(ref)
-                
+
         return {
             "isolated_components": isolated,
             "count": len(isolated)
@@ -149,15 +165,15 @@ class GraphContext:
         node_id = self._get_comp_node(component_ref)
         if not node_id:
             return {"error": f"Component {component_ref} not found."}
-            
+
         data = self.graph.nodes[node_id]
-        
+
         connected_nets = []
         for neighbor in self.graph.neighbors(node_id):
             n_data = self.graph.nodes[neighbor]
-            if n_data.get("type") == "net":
-                connected_nets.append(n_data.get("name", str(neighbor)))
-                
+            if _is_net(n_data):
+                connected_nets.append(_net_name(n_data, neighbor))
+
         return {
             "ref": component_ref,
             "value": data.get("value"),
@@ -173,19 +189,44 @@ class GraphContext:
             regex = re.compile(pattern, re.IGNORECASE)
         except re.error as e:
             return {"error": f"Invalid regex pattern '{pattern}': {e}"}
-            
+
         matches = []
         for ref, data in self.components.items():
             val = data.get("value")
             if val and regex.search(val):
                 matches.append({"ref": ref, "value": val})
-                
+
         return {
             "matches": matches,
             "count": len(matches)
         }
 
-TOOLS_SCHEMA = [
+    def get_nets_summary(self, min_components: int = 1) -> dict[str, Any]:
+        """Input: min_components (default 1). Output: {nets, count} for nets
+        wiring at least min_components components, sorted by component count desc."""
+        # Models often pass the threshold as a string ("2"); coerce defensively.
+        try:
+            min_components = int(min_components)
+        except (TypeError, ValueError):
+            min_components = 1
+        result: list[dict[str, Any]] = []
+        for name, data in self.nets.items():
+            node_id = data["node_id"]
+            comps = [
+                self.graph.nodes[nb].get("ref", str(nb))
+                for nb in self.graph.neighbors(node_id)
+                if _is_component(self.graph.nodes[nb])
+            ]
+            if len(comps) >= min_components:
+                result.append({
+                    "net": name,
+                    "num_components": len(comps),
+                    "components": comps,
+                })
+        result.sort(key=lambda x: x["num_components"], reverse=True)
+        return {"nets": result, "count": len(result)}
+
+TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -265,6 +306,22 @@ TOOLS_SCHEMA = [
                     "pattern": {"type": "string", "description": "The regex pattern to search for (e.g. '10k', '1K.*')"}
                 },
                 "required": ["pattern"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_nets_summary",
+            "description": "List nets that wire at least 'min_components' components together, "
+                           "sorted by component count. Use for questions about which nets connect "
+                           "multiple components.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "min_components": {"type": "integer", "description": "Minimum number of components a net must connect (default 1)"}
+                },
+                "required": []
             }
         }
     }

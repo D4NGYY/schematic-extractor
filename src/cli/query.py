@@ -7,7 +7,7 @@ import typer
 from src.core.graph_builder import BipartiteGraphBuilder
 from src.core.pdf_parser import VectorExtractor
 from src.core.text_associator import TextAssociator
-from src.llm.agent import LLMClient, MockClient, OllamaClient, SchematicAgent
+from src.llm.agent import DEFAULT_MODEL, LLMClient, MockClient, OllamaClient, SchematicAgent
 from src.llm.tools import GraphContext
 
 app = typer.Typer(help="CLI per l'agente LLM Schematic Extractor")
@@ -22,7 +22,7 @@ def query_cmd(
     question: str = typer.Argument(..., help="La domanda in linguaggio naturale"),
     pdf: Path = typer.Option(..., "--pdf", help="Percorso al file PDF dello schema"),
     mock: bool = typer.Option(False, "--mock", help="Usa il MockClient invece di Ollama"),
-    model: str = typer.Option("qwen2.5:7b-instruct-q4_K_M", "--model", help="Modello Ollama da utilizzare"),
+    model: str = typer.Option(DEFAULT_MODEL, "--model", help="Modello Ollama da utilizzare"),
     verbose: bool = typer.Option(False, "--verbose", help="Stampa l'output di log dettagliato")
 ) -> None:
     """
@@ -40,7 +40,7 @@ def query_cmd(
         pages = parser.extract(str(pdf))
     except Exception as e:
         typer.secho(f"Errore nel parsing PDF: {e}", fg=typer.colors.RED)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     if not pages:
         typer.secho("Errore: Nessuna pagina valida estratta.", fg=typer.colors.RED)
