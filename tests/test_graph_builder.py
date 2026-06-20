@@ -789,3 +789,58 @@ class TestPinTolScale:
         b = self._setup(factor=0.0)
         b._connect_pins_to_nets(scale=10.0)
         assert not b.graph.has_edge("R1", "N1")
+
+
+class TestOrphanWireReclaim:
+    """Wire-lever (2026-06-20): short connecting segments dropped as clustering
+    noise are collected as orphans so build_from_page can reclaim the
+    axis-aligned ones as wires (instead of losing their nets)."""
+
+    def test_cluster_collects_noise_as_orphans(self) -> None:
+        # a+b share endpoint (0,10) -> one 2-seg cluster (>= min_samples);
+        # `far` is isolated -> singleton noise -> orphan.
+        a = PDFSegment(start=(0.0, 0.0), end=(0.0, 10.0), item_type="line")
+        b = PDFSegment(start=(0.0, 10.0), end=(10.0, 10.0), item_type="line")
+        far = PDFSegment(start=(500.0, 500.0), end=(510.0, 500.0), item_type="line")
+        clusterer = SpatialClusterer(eps=5.0, min_samples=2)
+        clusterer.cluster([a, b, far], [])
+        assert far in clusterer.orphan_segments
+        assert a not in clusterer.orphan_segments
+        assert b not in clusterer.orphan_segments
+
+    def test_orphans_reset_between_calls(self) -> None:
+        far = PDFSegment(start=(500.0, 500.0), end=(510.0, 500.0), item_type="line")
+        clusterer = SpatialClusterer(eps=5.0, min_samples=2)
+        clusterer.cluster([far], [])
+        assert far in clusterer.orphan_segments
+        clusterer.cluster([], [])  # no segments -> orphans cleared
+        assert clusterer.orphan_segments == []
+
+
+    def test_select_orphans_default_reclaims_axis_aligned(self) -> None:
+        # Default knobs: every axis-aligned orphan is reclaimed; diagonals are not.
+        gb = BipartiteGraphBuilder()
+        horiz = PDFSegment(start=(0.0, 0.0), end=(10.0, 0.0), item_type="line")
+        diag = PDFSegment(start=(0.0, 0.0), end=(10.0, 10.0), item_type="line")
+        kept = gb._select_orphan_wires([horiz, diag], [], scale=5.0)
+        assert horiz in kept
+        assert diag not in kept
+
+    def test_select_orphans_min_len_filters_short(self) -> None:
+        # min_len_factor drops orphans shorter than factor*scale.
+        gb = BipartiteGraphBuilder(orphan_min_len_factor=1.0)
+        short = PDFSegment(start=(0.0, 0.0), end=(3.0, 0.0), item_type="line")
+        long = PDFSegment(start=(0.0, 0.0), end=(20.0, 0.0), item_type="line")
+        kept = gb._select_orphan_wires([short, long], [], scale=5.0)
+        assert long in kept
+        assert short not in kept
+
+    def test_select_orphans_require_connection(self) -> None:
+        # require_connection keeps only orphans touching the wire network.
+        gb = BipartiteGraphBuilder(orphan_require_connection=True)
+        wire = PDFSegment(start=(0.0, 0.0), end=(0.0, 50.0), item_type="line")
+        touching = PDFSegment(start=(0.0, 25.0), end=(10.0, 25.0), item_type="line")
+        floating = PDFSegment(start=(500.0, 500.0), end=(510.0, 500.0), item_type="line")
+        kept = gb._select_orphan_wires([touching, floating], [wire], scale=2.0)
+        assert touching in kept
+        assert floating not in kept

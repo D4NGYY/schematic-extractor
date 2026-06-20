@@ -67,6 +67,9 @@ class BipartiteGraphBuilder:
         cluster_eps: float | None = None,
         pin_tol_factor: float = 2.0,  # pin reach ≈ pin_tol_factor × characteristic stub length
         label_tol_factor: float = 6.0,  # label→net reach ≈ factor × wire_tol (labels float off the stub)
+        orphan_min_len_factor: float = 0.0,  # drop reclaimed orphans shorter than factor×scale (0 = no min)
+        orphan_max_len_factor: float | None = None,  # drop orphans longer than factor×scale (None = no max)
+        orphan_require_connection: bool = False,  # reclaim only orphans whose endpoint touches a wire/symbol
     ) -> None:
         self.classifier = classifier or ComponentClassifier()
         self.rule_classifier = RuleBasedClassifier()  # B1: attivo finché ML non è addestrato
@@ -75,6 +78,10 @@ class BipartiteGraphBuilder:
         self.cluster_eps = cluster_eps  # override link_dist del clustering (None = adattivo)
         self.pin_tol_factor = pin_tol_factor
         self.label_tol_factor = label_tol_factor
+        self.orphan_min_len_factor = orphan_min_len_factor
+        self.orphan_max_len_factor = orphan_max_len_factor
+        self.orphan_require_connection = orphan_require_connection
+        self._reclaimed_orphans: list[Any] = []  # introspection: last reclaimed orphan wires
         self.graph = nx.Graph()
         self.components: dict[str, ComponentNode] = {}
         self.nets: dict[str, NetNode] = {}
@@ -98,11 +105,15 @@ class BipartiteGraphBuilder:
         # so short nets between close components never formed (measured pin-dangling:
         # ampli_ht 48%, ecc83 23%). Only noise orphans are reclaimed, so dense symbol
         # bodies (which DO cluster) are untouched -> no Bryston over-merge.
-        orphan_wires = [
-            s
-            for s in clusterer.orphan_segments
-            if SpatialClusterer._is_axis_aligned(s)
-        ]
+        scale_est = (
+            self._estimate_scale(wire_segs)
+            if wire_segs
+            else self._estimate_scale(symbol_segs)
+        )
+        orphan_wires = self._select_orphan_wires(
+            clusterer.orphan_segments, wire_segs, scale_est
+        )
+        self._reclaimed_orphans = orphan_wires
         wire_segs = wire_segs + orphan_wires
 
         # 2. Associazione testo
@@ -330,6 +341,44 @@ class BipartiteGraphBuilder:
 
             self.nets[net.net_id] = net
             self.graph.add_node(net.net_id, bipartite=1, **net.__dict__)
+
+    def _select_orphan_wires(
+        self,
+        orphans: list[PDFSegment],
+        wire_segs: list[PDFSegment],
+        scale: float,
+    ) -> list[PDFSegment]:
+        """Pick which noise-orphan segments to reclaim as wires (wire sub-lever).
+
+        Default (all factors off) reclaims every axis-aligned orphan — the shipped
+        behavior, and the MEASURED WINNER. The optional filters below were swept
+        (length band, require_connection) on 8 real boards + Bryston: every filter
+        REGRESSES mean F1 (reclaim-all 0.586; conn_only 0.572; min-len 0.566).
+        The orphans a filter would drop carry real connectivity — the dominant loss
+        is missing wires (oracle, HANDOFF §19), so being permissive helps. Knobs
+        kept as a documented extension point; leave them off unless re-measuring.
+          * length band [min,max]×scale — drop micro-noise / long strays
+          * require_connection — keep only orphans whose endpoint touches the
+            established wire network (a real stub bridges to a wire; isolated
+            2-segment noise fragments touch nothing).
+        """
+        from src.ml.clustering import SpatialClusterer
+
+        cands = [s for s in orphans if SpatialClusterer._is_axis_aligned(s)]
+        if self.orphan_min_len_factor > 0:
+            lo = self.orphan_min_len_factor * scale
+            cands = [s for s in cands if s.length >= lo]
+        if self.orphan_max_len_factor is not None:
+            hi = self.orphan_max_len_factor * scale
+            cands = [s for s in cands if s.length <= hi]
+        if self.orphan_require_connection and cands:
+            tol = max(1.0, scale * 0.5)
+            cands = [
+                s
+                for s in cands
+                if any(self._segments_touch(s, w, tol) for w in wire_segs)
+            ]
+        return cands
 
     @staticmethod
     def _estimate_scale(segments: list[PDFSegment]) -> float:
