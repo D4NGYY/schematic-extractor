@@ -107,7 +107,9 @@ class BipartiteGraphBuilder:
         self.components: dict[str, ComponentNode] = {}
         self.nets: dict[str, NetNode] = {}
 
-    def build_from_page(self, page: ExtractedPage) -> nx.Graph:
+    def build_from_page(
+        self, page: ExtractedPage, detector_components: list[ComponentNode] | None = None
+    ) -> nx.Graph:
         """Costruisce il grafo bipartito da una pagina estratta."""
         from src.ml.clustering import SpatialClusterer
 
@@ -147,19 +149,25 @@ class BipartiteGraphBuilder:
         for v in values:
             val_map.setdefault(self._nearest_cluster(v, clusters), []).append(v)
 
-        # 3. Classifica e crea nodi componente
-        for cluster in clusters:
-            comp = self._create_component_node(cluster, ref_map, val_map)
-            self.components[comp.node_id] = comp
-            self.graph.add_node(comp.node_id, bipartite=0, **comp.__dict__)
+        # 3. Component nodes. If a detector supplied components (boxes -> nodes
+        # with real geometry inside each box), use those: they give TRUE component
+        # boundaries the geometric clusterer cannot (ref->cluster collision, §22/§23).
+        # Pins are still derived from real geometry via _connect_pins_to_nets.
+        if detector_components is not None:
+            for comp in detector_components:
+                self.components[comp.node_id] = comp
+                self.graph.add_node(comp.node_id, bipartite=0, **comp.__dict__)
+        else:
+            for cluster in clusters:
+                comp = self._create_component_node(cluster, ref_map, val_map)
+                self.components[comp.node_id] = comp
+                self.graph.add_node(comp.node_id, bipartite=0, **comp.__dict__)
 
-        # 3b. Recover refs that lost the ref->cluster collision: a distinct ref
-        # whose component body fused into a neighbouring cluster never becomes its
-        # own node (_create_component_node keeps one ref per cluster). Most are
-        # 2-terminal parts sitting next to wire stubs, so we re-instantiate them at
-        # their anchor and synthesise pins from nearby wires (no ML needed).
-        if self.recover_lost_refs:
-            self._recover_lost_refs(refs, wire_segs, scale_est)
+            # 3b. Recover refs that lost the ref->cluster collision (opt-in): a
+            # distinct ref whose body fused into a neighbour never becomes its own
+            # node. Re-instantiate at its anchor with wire-synthesised pins.
+            if self.recover_lost_refs:
+                self._recover_lost_refs(refs, wire_segs, scale_est)
 
         # D6: scala da wire_segs reali (o symbol_segs come fallback)
         scale = self._estimate_scale(wire_segs) if wire_segs else self._estimate_scale(symbol_segs)
