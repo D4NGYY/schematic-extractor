@@ -88,7 +88,7 @@ def _membership(b: BipartiteGraphBuilder, pi: int) -> dict:
     return out
 
 
-def score(pdf, sch, model, dpi, src, hybrid=False, min_frac=0.5):  # type: ignore[no-untyped-def]
+def score(pdf, sch, model, dpi, src, images_dir, hybrid=False, min_frac=0.5):  # type: ignore[no-untyped-def]
     pages = VectorExtractor().extract(str(pdf))
     gt = build_gt_graph(parse_kicad_sch(sch))
     gt_cn: dict = defaultdict(set)
@@ -103,7 +103,7 @@ def score(pdf, sch, model, dpi, src, hybrid=False, min_frac=0.5):  # type: ignor
             if detector:
                 if pi != 0:
                     continue  # dataset labels page 0 only
-                r = model(str(pdf_image(pdf)), verbose=False)[0]
+                r = model(str(pdf_image(pdf, dpi, images_dir)), verbose=False)[0]
                 dets = [
                     Detection(class_name=r.names[int(c)], bbox_px=tuple(xyxy), confidence=float(p))
                     for xyxy, c, p in zip(
@@ -131,15 +131,20 @@ def score(pdf, sch, model, dpi, src, hybrid=False, min_frac=0.5):  # type: ignor
             "geo_ovl": geo["overlap"], "det_ovl": det["overlap"]}
 
 
-def pdf_image(pdf: Path) -> Path:
-    cand = Path("data/detector/images") / f"{pdf.parent.name}.png"
+def pdf_image(pdf: Path, dpi: float, images_dir: Path) -> Path:
+    """Page-0 image for the detector. Prefer a prebuilt image in images_dir; else
+    render at `dpi`. The render dpi MUST match the dpi the detector was trained at
+    AND the --dpi passed to DetectorComponentSource (px->pt mapping)."""
+    cand = images_dir / f"{pdf.parent.name}.png"
     if cand.exists():
         return cand
     import fitz  # type: ignore
-    out = cand.parent / f"{pdf.parent.name}.png"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    page = fitz.open(str(pdf))[0]
-    page.get_pixmap(matrix=fitz.Matrix(150 / 72, 150 / 72)).save(str(out))
+    cache = Path(f"/tmp/_cmp_img_{int(dpi)}")
+    cache.mkdir(parents=True, exist_ok=True)
+    out = cache / f"{pdf.parent.name}.png"
+    if not out.exists():
+        page = fitz.open(str(pdf))[0]
+        page.get_pixmap(matrix=fitz.Matrix(dpi / 72, dpi / 72)).save(str(out))
     return out
 
 
@@ -150,6 +155,8 @@ def main() -> None:
     ap.add_argument("--hybrid", action="store_true",
                     help="fall back to geometric when the detector is sparse")
     ap.add_argument("--min-frac", type=float, default=0.5)
+    ap.add_argument("--images-dir", default="data/detector/images",
+                    help="prebuilt page-0 images (must match --dpi); else rendered")
     ap.add_argument("--keep-containers", action="store_true",
                     help="do NOT exclude hierarchical container roots")
     ap.add_argument("boards", nargs="*")
@@ -168,7 +175,7 @@ def main() -> None:
         try:
             sch_p = next(d.glob("*.kicad_sch"))
             r = score(next(d.glob("*.pdf")), sch_p, model, args.dpi, src,
-                      hybrid=args.hybrid, min_frac=args.min_frac)
+                      Path(args.images_dir), hybrid=args.hybrid, min_frac=args.min_frac)
             if not args.keep_containers and "num_gt" in r and is_container(sch_p, r["num_gt"]):
                 r["container"] = True
         except Exception as e:  # noqa: BLE001
