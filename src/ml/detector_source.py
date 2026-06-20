@@ -49,9 +49,19 @@ def _box_area(b: tuple[float, float, float, float]) -> float:
 class DetectorComponentSource:
     """Build graph components from detector boxes + page geometry."""
 
-    def __init__(self, dpi: float, text_associator: TextAssociator | None = None) -> None:
+    def __init__(
+        self,
+        dpi: float,
+        text_associator: TextAssociator | None = None,
+        box_pad_pt: float = 4.0,
+    ) -> None:
         self.px_to_pt = 72.0 / dpi
         self.text_associator = text_associator or TextAssociator()
+        # Pad each box outward (pt) before assigning segments so a part's
+        # connecting STUBS (which exit the body toward the net) are captured. Their
+        # free endpoints then land on the wires, so pins reach nets instead of
+        # dangling. 0 = strict body only.
+        self.box_pad_pt = box_pad_pt
 
     def components(
         self, detections: list[Detection], page: ExtractedPage
@@ -63,18 +73,22 @@ class DetectorComponentSource:
             )
             for d in detections
         ]
-        # Assign each segment to the SMALLEST detection box that contains its
-        # midpoint (smallest wins -> tighter part over an enclosing IC frame).
+        # Assign each segment to the SMALLEST detection box (padded) that contains
+        # its midpoint OR either endpoint. Smallest wins (tight part over enclosing
+        # IC frame); endpoint match captures stubs that exit the body to the net.
+        pad = self.box_pad_pt
         seg_groups: list[list[PDFSegment]] = [[] for _ in boxes_pt]
         for seg in page.segments:
             mx, my = _seg_midpoint(seg)
+            pts = ((mx, my), seg.start, seg.end)
             best = -1
             best_area = float("inf")
             for i, (_d, box) in enumerate(boxes_pt):
-                if _point_in(box, mx, my):
-                    a = _box_area(box)
-                    if a < best_area:
-                        best_area = a
+                pbox = (box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad)
+                if any(_point_in(pbox, px, py) for px, py in pts):
+                    area = _box_area(box)
+                    if area < best_area:
+                        best_area = area
                         best = i
             if best >= 0:
                 seg_groups[best].append(seg)

@@ -69,3 +69,13 @@ def test_build_from_page_uses_detector_components() -> None:
     gb.build_from_page(page, detector_components=comps)
     assert "R1" in gb.components
     assert gb.components["R1"].class_name == "resistor"
+
+
+def test_endpoint_or_pad_captures_stub() -> None:
+    # Stub midpoint (24,5) is OUTSIDE box (0,0,20,20) but its start (18,5) is
+    # inside -> endpoint match captures it (so its pin can reach the net).
+    stub = PDFSegment(start=(18, 5), end=(30, 5), item_type="line")
+    dets = [Detection(class_name="resistor", bbox_px=(0, 0, 20, 20))]
+    comps = DetectorComponentSource(dpi=72, box_pad_pt=0.0).components(dets, _page([stub]))
+    assert len(comps) == 1
+    assert stub in comps[0].cluster.segments
