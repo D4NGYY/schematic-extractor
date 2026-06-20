@@ -738,3 +738,41 @@ class TestMergeNetsByLabel:
         labels = [self._label("1", 0.0), self._label("1", 100.0)]
         b._merge_nets_by_label(labels, tol=5.0)
         assert len(b.nets) == 2  # pin numbers must not merge distinct nets
+
+
+class TestPinTolScale:
+    """pin_tol must scale with the characteristic stub length, not the tiny
+    wire-endpoint spacing — otherwise real pin→net gaps (~1-2 stub lengths)
+    never connect (arduino_micro pin-connection was 16%)."""
+
+    def _setup(self, factor: float) -> BipartiteGraphBuilder:
+        from src.core.graph_builder import ComponentNode, NetNode
+        b = BipartiteGraphBuilder(pin_tol_factor=factor)
+        net = NetNode(
+            net_id="N1", name="Net-1",
+            segments=[PDFSegment(start=(0, 0), end=(20, 0), item_type="line")],
+        )
+        b.nets = {"N1": net}
+        b.graph.add_node("N1", bipartite=1, **net.__dict__)
+        stub = PDFSegment(start=(10, 12), end=(10, 20), item_type="line")
+        cluster = ComponentCluster(
+            cluster_id=0, segments=[stub], shapes=[], text_blocks=[],
+            bbox=(8, 12, 12, 20), center=(10, 16),
+        )
+        comp = ComponentNode(node_id="R1", ref="R1", class_name="resistor",
+                             cluster=cluster, bbox=cluster.bbox)
+        b.components = {"R1": comp}
+        b.graph.add_node("R1", bipartite=0, **comp.__dict__)
+        return b
+
+    def test_pin_connects_within_scale(self) -> None:
+        # pin at (10,12) is 12 units from the net; scale*factor = 10*2 = 20 reaches it.
+        b = self._setup(factor=2.0)
+        b._connect_pins_to_nets(scale=10.0)
+        assert b.graph.has_edge("R1", "N1")
+
+    def test_pin_unreachable_without_scale(self) -> None:
+        # factor 0 falls back to 3*wire_tol (~3), far below the 12-unit gap.
+        b = self._setup(factor=0.0)
+        b._connect_pins_to_nets(scale=10.0)
+        assert not b.graph.has_edge("R1", "N1")

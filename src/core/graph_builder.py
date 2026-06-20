@@ -65,12 +65,14 @@ class BipartiteGraphBuilder:
         text_associator: TextAssociator | None = None,
         stub_length: float = 3.0,  # px
         cluster_eps: float | None = None,
+        pin_tol_factor: float = 2.0,  # pin reach ≈ pin_tol_factor × characteristic stub length
     ) -> None:
         self.classifier = classifier or ComponentClassifier()
         self.rule_classifier = RuleBasedClassifier()  # B1: attivo finché ML non è addestrato
         self.text_associator = text_associator or TextAssociator()
         self.stub_length = stub_length
         self.cluster_eps = cluster_eps  # override link_dist del clustering (None = adattivo)
+        self.pin_tol_factor = pin_tol_factor
         self.graph = nx.Graph()
         self.components: dict[str, ComponentNode] = {}
         self.nets: dict[str, NetNode] = {}
@@ -363,7 +365,11 @@ class BipartiteGraphBuilder:
     def _connect_pins_to_nets(self, scale: float) -> None:
         all_wires = self._all_wire_segs()
         wire_tol = self._derive_wire_tol(all_wires)
-        pin_tol = 3.0 * wire_tol
+        # Pin reach is on the scale of a connection stub (one characteristic
+        # segment length), NOT the wire-endpoint merge spacing: real pin→net gaps
+        # are ~1-2 stub lengths, while wire_tol (p25 endpoint spacing) is far
+        # smaller and connects almost nothing. Use the data-derived `scale`.
+        pin_tol = max(3.0 * wire_tol, scale * self.pin_tol_factor)
 
         for comp in self.components.values():
             if comp.cluster is None:
