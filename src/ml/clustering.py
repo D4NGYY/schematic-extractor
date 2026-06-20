@@ -107,6 +107,8 @@ class SpatialClusterer:
                 )
             )
 
+        clusters = self._merge_noise_clusters(clusters, link_dist)
+
         logger.info(
             "Clustering complete",
             clusters=len(clusters),
@@ -114,6 +116,96 @@ class SpatialClusterer:
             link_dist=link_dist,
         )
         return clusters
+
+    @staticmethod
+    def _merge_noise_clusters(clusters: list[ComponentCluster], link_dist: float) -> list[ComponentCluster]:
+        """Micro-clusters of 1-2 segments that share an endpoint within link_dist are likely fragments of the same symbol stroke, not separate components. Merge them to reduce over-segmentation."""
+        if not clusters:
+            return []
+            
+        # Calculate p90 of cluster sizes (number of segments) to avoid creating giant clusters
+        sizes = [c.num_segments for c in clusters]
+        p90_size = np.percentile(sizes, 90) if sizes else 0
+        max_size = max(5, p90_size)
+        
+        merged = []
+        skip = set()
+        
+        # Simple iterative merge (could be optimized with spatial index if slow)
+        for i, c1 in enumerate(clusters):
+            if i in skip:
+                continue
+            
+            if c1.num_segments > 2:
+                merged.append(c1)
+                continue
+                
+            current_cluster = c1
+            merged_this_round = True
+            while merged_this_round:
+                merged_this_round = False
+                for j in range(i + 1, len(clusters)):
+                    if j in skip:
+                        continue
+                    c2 = clusters[j]
+                    if c2.num_segments > 2:
+                        continue
+                        
+                    if current_cluster.num_segments + c2.num_segments > max_size:
+                        continue
+                        
+                    # Check bbox distance
+                    bb1 = current_cluster.bbox
+                    bb2 = c2.bbox
+                    # Distance between bboxes
+                    dx = max(0, max(bb1[0] - bb2[2], bb2[0] - bb1[2]))
+                    dy = max(0, max(bb1[1] - bb2[3], bb2[1] - bb1[3]))
+                    if math.hypot(dx, dy) > 1.5 * link_dist:
+                        continue
+                        
+                    # Check shared endpoint
+                    ep1 = SpatialClusterer.free_endpoints(current_cluster.segments)
+                    ep2 = SpatialClusterer.free_endpoints(c2.segments)
+                    shared = False
+                    for p1 in ep1:
+                        for p2 in ep2:
+                            if math.hypot(p1[0] - p2[0], p1[1] - p2[1]) <= link_dist:
+                                shared = True
+                                break
+                        if shared:
+                            break
+                            
+                    if shared:
+                        # Merge c2 into current_cluster
+                        new_segs = current_cluster.segments + c2.segments
+                        new_shapes = current_cluster.shapes + c2.shapes
+                        xs = [s.start[0] for s in new_segs] + [s.end[0] for s in new_segs]
+                        ys = [s.start[1] for s in new_segs] + [s.end[1] for s in new_segs]
+                        for sh in new_shapes:
+                            xs.extend([sh.bbox[0], sh.bbox[2]])
+                            ys.extend([sh.bbox[1], sh.bbox[3]])
+                        new_bbox = (min(xs), min(ys), max(xs), max(ys)) if xs else (0,0,0,0)
+                        new_center = ((new_bbox[0] + new_bbox[2]) / 2, (new_bbox[1] + new_bbox[3]) / 2) if xs else (0,0)
+                        current_cluster = ComponentCluster(
+                            cluster_id=current_cluster.cluster_id, # keep first id
+                            segments=new_segs,
+                            shapes=new_shapes,
+                            text_blocks=current_cluster.text_blocks + c2.text_blocks,
+                            bbox=new_bbox,
+                            center=new_center
+                        )
+                        skip.add(j)
+                        merged_this_round = True
+                        # Need to restart inner loop since current_cluster changed, but a simple greedy is fine
+                        break 
+                        
+            merged.append(current_cluster)
+            
+        # Reassign cluster IDs
+        for i, c in enumerate(merged):
+            c.cluster_id = i
+            
+        return merged
 
     @staticmethod
     def _link_segments(segments: list[PDFSegment], link_dist: float) -> list[list[int]]:

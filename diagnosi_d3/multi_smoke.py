@@ -82,8 +82,8 @@ def main():
                 
             page = pages[0]
             
-            # Using adaptive link_dist=0
-            builder = BipartiteGraphBuilder(cluster_eps=0)
+            # Using adaptive link_dist=None
+            builder = BipartiteGraphBuilder(cluster_eps=None)
             builder.build_from_page(page)
             
             components = list(builder.components.values())
@@ -102,16 +102,20 @@ def main():
                 # Extracted nets
                 ext_net_lists = []
                 for net in nets:
-                    net_pins = []
+                    net_refs = set()
                     for ref, c in builder.components.items():
                         for p in c.pins:
                             if p.connected_net == net.net_id:
-                                net_pins.append((ref, p.pin_id))
-                    if net_pins:
-                        ext_net_lists.append(net_pins)
+                                net_refs.add(ref)
+                    if len(net_refs) > 1:
+                        ext_net_lists.append(list(net_refs))
                         
                 # GT nets
-                gt_net_lists = [list(pins) for pins in gt_graph.nets.values() if len(pins) > 1]
+                gt_net_lists = []
+                for pins in gt_graph.nets.values():
+                    net_refs = set(ref for ref, pin in pins)
+                    if len(net_refs) > 1:
+                        gt_net_lists.append(list(net_refs))
                 
                 f1_gt = calculate_pair_f1(ext_net_lists, gt_net_lists)
                 

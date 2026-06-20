@@ -70,3 +70,44 @@ def test_adaptive_link_dist_positive() -> None:
 
 def test_empty_input_returns_empty() -> None:
     assert SpatialClusterer().cluster([], []) == []
+
+
+def make_cluster(segs, id=0):
+    xs = [s.start[0] for s in segs] + [s.end[0] for s in segs]
+    ys = [s.start[1] for s in segs] + [s.end[1] for s in segs]
+    bbox = (min(xs), min(ys), max(xs), max(ys))
+    center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+    from src.ml.clustering import ComponentCluster
+    return ComponentCluster(cluster_id=id, segments=segs, shapes=[], text_blocks=[], bbox=bbox, center=center)
+
+
+def test_merge_two_single_segment_clusters():
+    c1 = make_cluster([_seg(0, 0, 10, 0)], id=0)
+    c2 = make_cluster([_seg(10, 0, 20, 0)], id=1)
+    merged = SpatialClusterer._merge_noise_clusters([c1, c2], link_dist=5.0)
+    assert len(merged) == 1
+    assert merged[0].num_segments == 2
+
+
+def test_merge_does_not_merge_distant():
+    c1 = make_cluster([_seg(0, 0, 10, 0)], id=0)
+    c2 = make_cluster([_seg(100, 0, 110, 0)], id=1)
+    merged = SpatialClusterer._merge_noise_clusters([c1, c2], link_dist=5.0)
+    assert len(merged) == 2
+
+
+def test_merge_respects_max_size():
+    c1 = make_cluster([_seg(0, 0, 10, 0), _seg(10, 0, 20, 0)], id=0)
+    c2 = make_cluster([_seg(20, 0, 30, 0), _seg(30, 0, 40, 0)], id=1)
+    c3 = make_cluster([_seg(40, 0, 50, 0), _seg(50, 0, 60, 0)], id=2)
+    merged = SpatialClusterer._merge_noise_clusters([c1, c2, c3], link_dist=5.0)
+    # c1+c2 merge to 4. c3 is 2. 4+2=6 > max_size (5) -> stops merging.
+    assert len(merged) == 2
+
+
+def test_merge_keeps_substantial_clusters():
+    c1_segs = [_seg(i * 10, 0, (i + 1) * 10, 0) for i in range(5)]
+    c1 = make_cluster(c1_segs, id=0)
+    c2 = make_cluster([_seg(50, 0, 60, 0)], id=1)
+    merged = SpatialClusterer._merge_noise_clusters([c1, c2], link_dist=5.0)
+    assert len(merged) == 2

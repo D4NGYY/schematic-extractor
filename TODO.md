@@ -31,6 +31,8 @@
 
 ## P4 — Phases 4–6 (after P1–P3)
 
+- [~] 🔴 **D3 — connectivity (visual-first).** Investigato (HANDOFF §3a): net layer affamato (20 fili; terminali ~45pt dal filo), causa a monte = `separate_wires` scarta 25 fili corti nei simboli; pin = free-endpoint (36/51 cluster -> 2-6 terminali); relazione pin↔filo NON leggibile da metriche cieche. Step: (a) overlay pin+fili, (b) diagnosi visiva, (c) fix separate_wires + pin free-endpoint + connessione punto-segmento con tol osservata.
+
 - [x] 🟡 **Phase 4 — ERC** (`src/core/erc.py`): ISOLATED_COMPONENT, FLOATING_PIN, DANGLING_NET, UNCONNECTED_NET, UNNAMED_NET. 16 test. Bryston: 31 err + 1 warn (stub matching debole → D6 prioritario).
 - [ ] 🟡 **Phase 5 — LLM tool calling** (`src/core/llm_tools.py`) + 20-question topology benchmark.
 - [ ] 🟢 **Phase 6 — Streamlit UI** (`src/ui/app.py`): 300 DPI PNG render + SVG overlay + selectbox; then portfolio polish.

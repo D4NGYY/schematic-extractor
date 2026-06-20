@@ -108,7 +108,7 @@ class BipartiteGraphBuilder:
         scale = self._estimate_scale(wire_segs) if wire_segs else self._estimate_scale(symbol_segs)
 
         # 4. Trova nets: BFS sui wire-candidate pre-separati
-        self._build_nets(wire_segs, scale)
+        self._build_nets(wire_segs, scale, junctions=page.junction_candidates())
 
         # 5. Pin-point matching: connetti pin ai nets
         self._connect_pins_to_nets(scale)
@@ -267,15 +267,25 @@ class BipartiteGraphBuilder:
                     best_net = n.net_id
         return best_net
 
-    def _build_nets(self, wire_segs: list[PDFSegment], scale: float) -> None:
+    def _build_nets(self, wire_segs: list[PDFSegment], scale: float, junctions: list[Any] = None) -> None:
         if not wire_segs:
             return
+
+        junctions = junctions or []
+        for j in junctions:
+            bbox = j.bbox
+            cx = (bbox[0] + bbox[2]) / 2
+            cy = (bbox[1] + bbox[3]) / 2
+            j_seg = PDFSegment(start=(cx, cy), end=(cx, cy), item_type="junction")
+            wire_segs.append(j_seg)
 
         from src.ml.clustering import SpatialClusterer
         clusters = [comp.cluster for comp in self.components.values() if comp.cluster]
         SpatialClusterer.recover_stub_wires(clusters, wire_segs)
 
-        wire_tol = self._derive_wire_tol(wire_segs)
+        # Remove junctions from the wire_segs passed to derive_wire_tol, as zero-length segments skew the calculation
+        real_wires = [s for s in wire_segs if s.item_type != "junction"]
+        wire_tol = self._derive_wire_tol(real_wires)
         visited: set[int] = set()
         net_counter = 0
 

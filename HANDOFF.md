@@ -42,9 +42,12 @@ Open-source / career-capital track. Ground truth is **auto-derived from KiCad fi
 ---
 
 ## 3. The problem & root cause (current focus)
-- **Just fixed — clustering blob (WB1):** the old clustering (DBSCAN on segment **midpoints**, single global `eps≈47pt`) chained densely-packed symbol strokes into **one fake page-sized "component"** (177 segments, 794×505pt). Downstream this collapsed connectivity to 9 edges / 3-of-8 isolated. **Root cause:** midpoint density + one global radius cannot separate components that sit close together. **Fix:** single-linkage on **shared endpoints** (how a symbol is actually drawn — touching strokes; wires that would bridge symbols are already removed), with a **data-derived** linkage distance. Blob eliminated; edges 9→35.
-- **Newly visible — pin→net (D3) + over-segmentation:** the blob was masking these. Pins are still virtual bbox-corner points (topologically wrong for most parts), so many real components don't attach to a net (34 isolated). Some clusters are 2-segment noise. This is the next bottleneck.
-- **Already filtered:** 280 Bezier-arc fragments (`item_type="curve"`, ~2.0pt) are removed by `separate_wires()` before clustering — they are **not** the residual blob cause (a common misdiagnosis; verified).
+- **Resolved — clustering blob (WB1):** single-linkage on endpoints eliminated the page-spanning blob.
+- **Resolved — T-junction/Dot-junction (V5/V6):** Wires connecting at T-junctions or explicitly via dot-junctions (filled circles) are now successfully merged into degree 3+ nets (`g3+` metric is now strictly > 0 for all schematics).
+- **Newly diagnosed — F1=0 and over-segmentation (Arduino Micro):** F1 scores on the multi-schematic smoke test are 0.00. This is caused by two overlapping issues:
+  1. **Extreme over-segmentation:** Schematics like Arduino Micro contain symbols drawn with gaps larger than the adaptive `link_dist`, causing them to shatter into tiny 1-2 segment fragments (e.g. 193 components detected, 145 isolated). The new `_merge_noise_clusters` helps, but cannot bridge massive gaps without becoming a blob again.
+  2. **Pin mapping mismatch:** The extractor assigns geometric pin IDs (`U1_1`, `U1_2`) while ground truth uses logical library IDs (`1`, `2`, `A`, `K`). Pairwise F1 fails completely because these strings never match. (We tried stripping pins and evaluating component-level connections, but the refs themselves only overlap by ~30% due to text extraction issues).
+- **Already filtered:** 280 Bezier-arc fragments (`item_type="curve"`, ~2.0pt) are removed by `separate_wires()` before clustering.
 
 ---
 

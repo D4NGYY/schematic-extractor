@@ -11,7 +11,18 @@
         10,
         10
       ],
-      "pins": []
+      "pins": [
+        {
+          "pin_id": "R1_1",
+          "pin_name": null,
+          "position": [
+            10,
+            10
+          ],
+          "net": null,
+          "nc": false
+        }
+      ]
     }
   ],
   "nets": [],

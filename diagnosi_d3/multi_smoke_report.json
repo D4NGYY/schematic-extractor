@@ -1,47 +1,47 @@
 [
   {
     "board": "Bryston",
-    "components": 49,
-    "nets": 16,
-    "edges": 35,
-    "isolated": 17,
-    "g3+": 0,
+    "components": 63,
+    "nets": 91,
+    "edges": 77,
+    "isolated": 10,
+    "g3+": 17,
     "f1_gt": null
   },
   {
     "board": "arduino_micro",
-    "components": 136,
-    "nets": 36,
-    "edges": 142,
-    "isolated": 9,
-    "g3+": 4,
+    "components": 193,
+    "nets": 127,
+    "edges": 63,
+    "isolated": 145,
+    "g3+": 13,
     "f1_gt": 0.0
   },
   {
     "board": "arduino_nano",
-    "components": 24,
-    "nets": 1,
-    "edges": 1,
-    "isolated": 23,
-    "g3+": 0,
-    "f1_gt": 1.0
+    "components": 128,
+    "nets": 23,
+    "edges": 19,
+    "isolated": 109,
+    "g3+": 8,
+    "f1_gt": 0.0
   },
   {
     "board": "arduino_uno_r3",
-    "components": 17,
-    "nets": 4,
-    "edges": 17,
-    "isolated": 0,
-    "g3+": 0,
+    "components": 43,
+    "nets": 1,
+    "edges": 33,
+    "isolated": 10,
+    "g3+": 5,
     "f1_gt": null
   },
   {
     "board": "esp32_devkitc",
-    "components": 15,
-    "nets": 19,
-    "edges": 12,
-    "isolated": 5,
-    "g3+": 0,
+    "components": 35,
+    "nets": 41,
+    "edges": 11,
+    "isolated": 27,
+    "g3+": 1,
     "f1_gt": null
   }
 ]
