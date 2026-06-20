@@ -68,3 +68,24 @@ graph = BipartiteGraphBuilder().build_from_page(page, detector_components=comps)
 `diagnosi_d3/f1_all_boards.py` (build with `detector_components`) and compare net-F1
 vs the geometric baseline (0.481 real-circuit mean) and the oracle ceiling. That
 number is the verdict on whether the detector delivers "make it actually work".
+
+## Hybrid + container exclusion (recall robustness)
+The detector is high-variance: big wins (sallen_key 0.86, ecc83-pp 0.82, nano 1.0)
+but total misses on small/under-represented boards (pic_sockets geo 0.625 -> det
+0.0). Two mechanisms handle this:
+- **Hybrid fallback** — `DetectorComponentSource.components_or_fallback(dets, page,
+  min_frac=0.5)` returns `None` when the detector covers < `min_frac` of the page's
+  ref designators; the caller then uses the geometric path. Keeps wins, drops crashes.
+- **Container exclusion** — hierarchical roots like `video` (8 pages) reference
+  sub-sheets (`muxdata`, `pal-ntsc`, …) that are ALREADY separate boards. Scoring
+  them double-counts; they're excluded from the aggregate (`is_container`). Do NOT
+  multi-page-label them — it duplicates data and leaks train/val.
+
+Recommended eval (honest delta, robust):
+```
+PYTHONHASHSEED=0 PYTHONPATH=. python diagnosi_d3/compare_detector.py \
+    --weights runs/detect/schematic_detector/weights/best.pt --hybrid
+```
+Real detector misses on genuine small boards (muxdata, rams) are a TRAINING-side
+recall problem: regenerate the dataset at higher dpi (`--dpi 250`) for small symbols
+and retrain with more epochs/augmentation — not a pipeline change.
