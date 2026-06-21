@@ -11,6 +11,17 @@ import structlog
 
 logger = structlog.get_logger("pdf_parser")
 
+
+def _rgb_to_255(c: object) -> tuple[int, int, int] | None:
+    """PyMuPDF stroke color (0-1 float triple) -> 0-255 int triple (or None)."""
+    if not c:
+        return None
+    try:
+        r, g, b = (float(x) for x in tuple(c)[:3])  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return (int(round(r * 255)), int(round(g * 255)), int(round(b * 255)))
+
 # B4: regex per valori EDA reali (E96, standard, part number, tensioni)
 _VALUE_RE = re.compile(
     r"^(?:"
@@ -299,8 +310,10 @@ class VectorExtractor:
                 result.shapes.append(circle)
                 continue  # gli items sono i Bezier del cerchio, non processarli
             items = drawing.get("items", [])
+            seg_color = _rgb_to_255(drawing.get("color"))
+            seg_width = float(drawing.get("width") or 0.0)
             for item in items:
-                parsed = self._parse_drawing_item(item)
+                parsed = self._parse_drawing_item(item, seg_color, seg_width)
                 if parsed is not None:
                     if isinstance(parsed, PDFSegment):
                         result.segments.append(parsed)
@@ -347,7 +360,12 @@ class VectorExtractor:
         logger.info("OCR fallback applied", recovered_blocks=len(ocr_blocks))
         return ocr_blocks
 
-    def _parse_drawing_item(self, item: tuple[Any, ...]) -> PDFSegment | PDFShape | None:
+    def _parse_drawing_item(
+        self,
+        item: tuple[Any, ...],
+        color: tuple[int, int, int] | None = None,
+        width: float = 0.0,
+    ) -> PDFSegment | PDFShape | None:
         """Parse di un singolo item da page.get_drawings().
 
         PyMuPDF get_drawings() ritorna items come:
@@ -365,6 +383,8 @@ class VectorExtractor:
                 start=(float(p1[0]), float(p1[1])),
                 end=(float(p2[0]), float(p2[1])),
                 item_type="line",
+                stroke_width=width,
+                color=color,
             )
 
         if kind == "c":
@@ -374,6 +394,8 @@ class VectorExtractor:
                 start=(float(p1[0]), float(p1[1])),
                 end=(float(p4[0]), float(p4[1])),
                 item_type="curve",
+                stroke_width=width,
+                color=color,
             )
 
         if kind == "re":
@@ -568,4 +590,6 @@ class VectorExtractor:
             start=points[0],
             end=points[-1],
             item_type="line",
+            stroke_width=a.stroke_width or b.stroke_width,
+            color=a.color if a.color is not None else b.color,
         )

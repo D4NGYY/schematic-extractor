@@ -87,6 +87,7 @@ class BipartiteGraphBuilder:
         recover_lost_refs: bool = False,  # instantiate refs that lost the cluster collision as components
         recover_radius_factor: float = 3.0,  # search wire stubs within factor×scale of a lost ref anchor
         recover_max_pins: int = 4,  # cap synthesized pins per recovered component
+        use_color: bool = False,  # color-aware wire separation (KiCad stroke encoding)
     ) -> None:
         self.classifier = classifier or ComponentClassifier()
         self.rule_classifier = RuleBasedClassifier()  # B1: attivo finché ML non è addestrato
@@ -101,6 +102,7 @@ class BipartiteGraphBuilder:
         self.recover_lost_refs = recover_lost_refs
         self.recover_radius_factor = recover_radius_factor
         self.recover_max_pins = recover_max_pins
+        self.use_color = use_color
         self._reclaimed_orphans: list[Any] = []  # introspection: last reclaimed orphan wires
         self._recovered_refs: list[str] = []  # introspection: refs recovered as synthetic components
         self.graph = nx.Graph()
@@ -116,7 +118,9 @@ class BipartiteGraphBuilder:
         # Wire/symbol separation: i fili (axis-aligned + lunghi) vanno in wire_segs;
         # i primitivi brevi/diagonali (corpi simbolo) vanno in symbol_segs.
         # DBSCAN vede solo symbol_segs → cluster piccoli e coerenti, nessun cluster gigante.
-        symbol_segs, wire_segs = SpatialClusterer.separate_wires(page.segments)
+        symbol_segs, wire_segs = SpatialClusterer.separate_wires(
+            page.segments, use_color=self.use_color
+        )
 
         # 1. Clustering spaziale: SOLO symbol-primitive
         clusterer = SpatialClusterer(eps=self.cluster_eps)

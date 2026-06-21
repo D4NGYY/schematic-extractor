@@ -128,8 +128,8 @@ class SpatialClusterer:
     @staticmethod
     def _text_guided_merge(clusters: list[ComponentCluster], text_blocks: list[PDFTextBlock], link_dist: float) -> list[ComponentCluster]:
         import re
-        REF_PATTERN = re.compile(r"^[A-Za-z]+\d+[A-Za-z]*$")
-        refs = [t for t in text_blocks if REF_PATTERN.match(t.text.strip())]
+        ref_pattern = re.compile(r"^[A-Za-z]+\d+[A-Za-z]*$")
+        refs = [t for t in text_blocks if ref_pattern.match(t.text.strip())]
 
         if not refs or not clusters:
             return clusters
@@ -175,7 +175,7 @@ class SpatialClusterer:
             merged_groups[find(i)].append(i)
 
         merged_clusters = []
-        for gid, indices in merged_groups.items():
+        for _gid, indices in merged_groups.items():
             if len(indices) == 1:
                 merged_clusters.append(clusters[indices[0]])
             else:
@@ -429,6 +429,7 @@ class SpatialClusterer:
     def separate_wires(
         segments: list[PDFSegment],
         factor: float = 3.0,
+        use_color: bool = False,
     ) -> tuple[list[PDFSegment], list[PDFSegment]]:
         """Separa wire-candidate da symbol-primitive prima del clustering.
 
@@ -473,6 +474,25 @@ class SpatialClusterer:
                 wire_segs.append(seg)
             else:
                 symbol_segs.append(seg)
+
+        # Color-aware reclaim (#3): KiCad color-codes wires distinctly from symbol
+        # bodies. Learn the wire color from the geometrically-confident wires, then
+        # reclaim SHORT same-color axis-aligned strokes the length gate dropped
+        # (the dangling-pin cause). Additive only; auto-falls-back to pure geometry
+        # on monochrome PDFs (wire color not distinct -> wire_color_model None).
+        if use_color:
+            from src.ml.color_separator import same_color, wire_color_model
+
+            wc = wire_color_model(wire_segs, symbol_segs)
+            if wc is not None:
+                kept: list[PDFSegment] = []
+                for seg in symbol_segs:
+                    if SpatialClusterer._is_axis_aligned(seg) and same_color(seg.color, wc):
+                        wire_segs.append(seg)
+                    else:
+                        kept.append(seg)
+                symbol_segs = kept
+
         return symbol_segs, wire_segs
 
     @staticmethod
@@ -491,4 +511,3 @@ class SpatialClusterer:
         kth_dists = dists[:, -1]
         eps = float(np.percentile(kth_dists, 90)) * 1.5
         return max(eps, 5.0)
-           
