@@ -1,7 +1,10 @@
 .aider*
 __pycache__/
 *.pyc
-data/detector/
+data/detector*/
 diagnosi_d3/_*.py
 diagnosi_d3/_*.json
 diagnosi_d3/_sweep_cache.pkl
+runs/
+diagnosi_d3/overlay_*.png
+.claude/
