@@ -26,6 +26,7 @@ from pathlib import Path
 from src.core.graph_builder import BipartiteGraphBuilder
 from src.core.kicad_gt_reader import build_gt_graph, parse_kicad_sch
 from src.core.pdf_parser import VectorExtractor
+from src.core.scope import assess_scope
 from src.ml.detector_source import Detection, DetectorComponentSource
 
 BASE = Path("test_input/multi_schematic")
@@ -88,7 +89,7 @@ def _membership(b: BipartiteGraphBuilder, pi: int) -> dict:
     return out
 
 
-def score(pdf, sch, model, dpi, src, images_dir, hybrid=False, min_frac=0.5):  # type: ignore[no-untyped-def]
+def score(pdf, sch, model, dpi, src, images_dir, hybrid=False, min_frac=0.5, imgsz=None):  # type: ignore[no-untyped-def]
     pages = VectorExtractor().extract(str(pdf))
     gt = build_gt_graph(parse_kicad_sch(sch))
     gt_cn: dict = defaultdict(set)
@@ -103,7 +104,10 @@ def score(pdf, sch, model, dpi, src, images_dir, hybrid=False, min_frac=0.5):  #
             if detector:
                 if pi != 0:
                     continue  # dataset labels page 0 only
-                r = model(str(pdf_image(pdf, dpi, images_dir)), verbose=False)[0]
+                kwargs = {"verbose": False}
+                if imgsz is not None:
+                    kwargs["imgsz"] = imgsz
+                r = model(str(pdf_image(pdf, dpi, images_dir)), **kwargs)[0]
                 dets = [
                     Detection(class_name=r.names[int(c)], bbox_px=tuple(xyxy), confidence=float(p))
                     for xyxy, c, p in zip(
@@ -126,7 +130,7 @@ def score(pdf, sch, model, dpi, src, images_dir, hybrid=False, min_frac=0.5):  #
 
     geo = build(False)
     det = build(True)
-    return {"num_gt": len(gt.components), "pages": len(pages),
+    return {"num_gt": len(gt.components), "gt_nets": len(gt.nets), "pages": len(pages),
             "geo_f1": geo["f1"], "det_f1": det["f1"],
             "geo_ovl": geo["overlap"], "det_ovl": det["overlap"]}
 
@@ -159,6 +163,8 @@ def main() -> None:
                     help="prebuilt page-0 images (must match --dpi); else rendered")
     ap.add_argument("--keep-containers", action="store_true",
                     help="do NOT exclude hierarchical container roots")
+    ap.add_argument("--imgsz", type=int, default=None,
+                    help="inference image size for YOLO model")
     ap.add_argument("boards", nargs="*")
     args = ap.parse_args()
     from ultralytics import YOLO  # noqa: PLC0415
@@ -175,7 +181,8 @@ def main() -> None:
         try:
             sch_p = next(d.glob("*.kicad_sch"))
             r = score(next(d.glob("*.pdf")), sch_p, model, args.dpi, src,
-                      Path(args.images_dir), hybrid=args.hybrid, min_frac=args.min_frac)
+                      Path(args.images_dir), hybrid=args.hybrid, min_frac=args.min_frac,
+                      imgsz=args.imgsz)
             if not args.keep_containers and "num_gt" in r and is_container(sch_p, r["num_gt"]):
                 r["container"] = True
         except Exception as e:  # noqa: BLE001
@@ -194,7 +201,16 @@ def main() -> None:
     if real:
         g = sum(r["geo_f1"] for r in real) / len(real)
         de = sum(r["det_f1"] for r in real) / len(real)
-        print(f"\nboards={len(real)}  geo mean={g:.4f}  det mean={de:.4f}  delta={de - g:+.4f}")
+        print(f"\nALL {len(real)} boards   geo mean={g:.4f}  det mean={de:.4f}  delta={de - g:+.4f}")
+        ins = [r for r in real if assess_scope(r["num_gt"], r["gt_nets"]).in_scope]
+        out = [r for r in real if not assess_scope(r["num_gt"], r["gt_nets"]).in_scope]
+        if ins:
+            gi = sum(r["geo_f1"] for r in ins) / len(ins)
+            di = sum(r["det_f1"] for r in ins) / len(ins)
+            print(f"IN-SCOPE {len(ins)} boards  geo mean={gi:.4f}  det mean={di:.4f}  delta={di - gi:+.4f}")
+        if out:
+            names = ", ".join(n for n, r in rows if r in out)
+            print(f"out-of-scope (excluded, ultra-dense): {len(out)} -> {names}")
 
 
 if __name__ == "__main__":
