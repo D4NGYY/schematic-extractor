@@ -146,3 +146,114 @@ def test_get_nets_summary(real_context: GraphContext) -> None:
 
     res_all = real_context.get_nets_summary(min_components=1)
     assert res_all["count"] == 2  # Net-1 and Net-2
+
+
+# --- Semantic enrichment (added to make LLM answers informative) ---
+# Backward-compatible: each tool ADDS enriched fields alongside the raw ones.
+
+def test_infer_class_from_ref() -> None:
+    from src.llm.tools import _infer_class_from_ref
+
+    assert _infer_class_from_ref("R1") == "resistor"
+    assert _infer_class_from_ref("C5") == "capacitor"
+    assert _infer_class_from_ref("U3") == "IC"
+    assert _infer_class_from_ref("L1") == "inductor"
+    assert _infer_class_from_ref("Q2") == "transistor"
+    assert _infer_class_from_ref("J1") == "connector"
+    assert _infer_class_from_ref("SW1") == "switch"   # multi-letter prefix
+    assert _infer_class_from_ref("TP3") == "test point"
+    assert _infer_class_from_ref("Z99") == "unknown"  # unrecognized
+
+
+def test_is_rail_detection() -> None:
+    from src.llm.tools import _is_rail
+
+    assert _is_rail("GND") is True
+    assert _is_rail("VCC") is True
+    assert _is_rail("+5V") is True
+    assert _is_rail("3V3") is True
+    assert _is_rail("AGND") is True
+    assert _is_rail("N6") is False
+    assert _is_rail("Net-1") is False
+    assert _is_rail("RX") is False
+
+
+def test_describe_component(real_context: GraphContext) -> None:
+    from src.llm.tools import _describe_component
+
+    # Real schema fixture: R1 has class_name="resistor", value="10k".
+    data = real_context.graph.nodes["c_r1"]
+    assert _describe_component("R1", data) == "R1 (resistor, 10k)"
+    # Unknown class + no value -> just ref + inferred class.
+    assert _describe_component("R1", {}) == "R1 (resistor)"
+    assert _describe_component("U3", {"class_name": "unknown"}) == "U3 (IC)"
+
+
+def test_get_neighbors_enriched(context: GraphContext) -> None:
+    """get_neighbors now returns description fields alongside raw refs."""
+    res = context.get_neighbors("R1")
+    # Backward-compat: raw fields unchanged.
+    assert res["component"] == "R1"
+    assert "VCC" in res["connected_nets"]
+    # Enriched fields present.
+    assert "component_description" in res
+    assert "resistor" in res["component_description"].lower()
+    assert "connected_nets_detail" in res
+    # Power rail should be tagged.
+    rail_detail = [d for d in res["connected_nets_detail"] if "VCC" in d]
+    assert rail_detail and "power rail" in rail_detail[0]
+    signal_detail = [d for d in res["connected_nets_detail"] if "N1" in d]
+    assert signal_detail and "signal net" in signal_detail[0]
+
+
+def test_get_component_info_enriched(context: GraphContext) -> None:
+    res = context.get_component_info("U1")
+    assert "description" in res
+    assert "OpAmp" in res["description"] or "IC" in res["description"]
+    # connected_nets_detail tags rail vs signal.
+    details = res["connected_nets_detail"]
+    assert any("power rail" in d and "VCC" in d for d in details)
+    assert any("signal net" in d and "N1" in d for d in details)
+
+
+def test_get_net_components_enriched(context: GraphContext) -> None:
+    # Rail net gets type="power rail".
+    res_rail = context.get_net_components("VCC")
+    assert res_rail["type"] == "power rail"
+    # Each component has a description.
+    assert all("description" in c for c in res_rail["components"])
+    # Signal net gets type="signal net".
+    res_sig = context.get_net_components("N1")
+    assert res_sig["type"] == "signal net"
+
+
+def test_find_isolated_enriched(context: GraphContext) -> None:
+    res = context.find_isolated()
+    assert "components_detail" in res
+    assert "note" in res
+    assert len(res["components_detail"]) == res["count"]
+    # ISO1 has class_name="Unknown" -> description should infer from ref.
+    iso_desc = [d for d in res["components_detail"] if "ISO1" in d]
+    assert iso_desc  # present
+
+
+def test_get_nets_summary_enriched(context: GraphContext) -> None:
+    res = context.get_nets_summary(min_components=1)
+    # Each net entry has type + components_detail.
+    for entry in res["nets"]:
+        assert "type" in entry
+        assert entry["type"] in ("power rail", "signal net")
+        assert "components_detail" in entry
+    # Power rails sort first.
+    vcc_entry = next(e for e in res["nets"] if e["net"] == "VCC")
+    assert vcc_entry["type"] == "power rail"
+    # First entry should be a power rail (sorting: rails first).
+    assert res["nets"][0]["type"] == "power rail"
+
+
+def test_search_by_value_enriched(context: GraphContext) -> None:
+    res = context.search_by_value("10k")
+    assert res["count"] == 1
+    match = res["matches"][0]
+    assert "description" in match
+    assert "resistor" in match["description"].lower()

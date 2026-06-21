@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from typing import Any
 
@@ -12,6 +13,10 @@ logger = structlog.get_logger("agent")
 # Default tool-calling model: winner of the 5-query Bryston benchmark
 # (qwen2.5 scored 25/25, 5/5 queries, avg 3.24s — see diagnosi_d3/benchmark_llm.py).
 DEFAULT_MODEL = "qwen2.5:7b-instruct-q4_K_M"
+
+# Ollama endpoint. In Docker (compose) point this at the ollama service via the
+# OLLAMA_BASE_URL env var; locally it defaults to the loopback.
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 
 # Derived from TOOLS_SCHEMA: valid tool names and their ordered parameter names.
 # Used by the ReAct fallback parser to recognise text-form tool calls while
@@ -33,7 +38,7 @@ class OllamaClient(LLMClient):
     def __init__(self, model: str = DEFAULT_MODEL):
         self.model = model
         self.client = openai.AsyncOpenAI(
-            base_url="http://localhost:11434/v1",
+            base_url=OLLAMA_BASE_URL,
             api_key="ollama"  # required by SDK but ignored by Ollama
         )
 
@@ -92,16 +97,36 @@ class SchematicAgent:
         self.graph_context = graph_context
         self.llm_client = llm_client
         self.max_iterations = max_iterations
+        # Messaggi dell'ultima query (per tool-trace UI). Aggiornato da query().
+        self.last_messages: list[dict[str, Any]] = []
         self.system_prompt = (
-            "You are a schematic AI reasoner answering questions about a Components<->Nets "
-            "graph. You MUST base every answer on tool results — never invent components, "
-            "nets, values or connections. Reply in the user's language, be concise and "
-            "technical, and cite the exact component/net refs returned by the tools.\n"
-            "To use a tool, PREFER the native function-calling format. If your backend cannot, "
-            "fall back to a single line, exactly:\n"
-            "TOOL_CALL: tool_name({\"arg\": \"value\"})\n"
-            "Call one tool at a time, then read its JSON result before answering. If a tool "
-            "returns an error or empty result, report that honestly instead of guessing."
+            "You are an electrical-engineering assistant answering questions about an "
+            "electronic schematic, reconstructed as a Components<->Nets graph by automated "
+            "extraction (not a hand-verified netlist).\n"
+            "\n"
+            "DOMAIN KNOWLEDGE — use this to interpret tool results:\n"
+            "- Ref designators: R=resistor, C=capacitor, L=inductor, D=diode, Q=transistor, "
+            "U=IC (integrated circuit), J/P=connector, Y=crystal, F=fuse, K=relay, SW=switch. "
+            "Tool outputs include a human-readable 'description' field (e.g. 'R1 (resistor, 10k)') — prefer it.\n"
+            "- Nets labeled GND/VCC/VDD/+5V/3V3 etc. are POWER RAILS (shared supply/ground); "
+            "tool outputs tag them as 'power rail'. All other nets are SIGNAL nets.\n"
+            "- 'Isolated' components (find_isolated) have no detected connection — often an "
+            "extraction gap, NOT necessarily a design intent.\n"
+            "\n"
+            "RULES:\n"
+            "1. Base EVERY claim on tool results. Never invent components, nets, values or connections.\n"
+            "2. Reply in the user's language. Be concise and technical.\n"
+            "3. When asked 'what is this circuit' / 'describe the schematic', do NOT just list refs. "
+            "Call get_nets_summary(min_components=2) and find_isolated first, then EXPLAIN the "
+            "topology in functional terms: identify the rails, group components by function "
+            "(filter, amplifier, regulator, digital, ...), and state what the circuit likely does.\n"
+            "4. Cite exact refs/net names from the tool output. Prefer the 'description' field over raw refs.\n"
+            "5. If a tool returns an error or empty result, report that honestly instead of guessing.\n"
+            "\n"
+            "TOOL CALL FORMAT:\n"
+            "- PREFER native function-calling. If your backend cannot, fall back to a single line:\n"
+            "  TOOL_CALL: tool_name({\"arg\": \"value\"})\n"
+            "- Call one tool at a time, read its JSON result, then continue or answer."
         )
 
     def _execute_tool(self, name: str, arguments_str: str) -> str:
@@ -252,6 +277,8 @@ class SchematicAgent:
                     continue
 
             # If no tools called (native or react), we are done
+            self.last_messages = messages
             return content
 
+        self.last_messages = messages
         return "Could not answer within max iterations."
