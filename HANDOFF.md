@@ -377,3 +377,27 @@ Before spending a GPU cycle on a pin-keypoint/pin-as-class detector, re-ran `ora
 
 ### Honesty caveat for README/portfolio (IMPORTANT)
 The color-aware gain (§29, micro +0.105) and the detector F1 are measured on **KiCad-rendered PDFs** — which is ALSO the only regime we can auto-label/eval. But the project's STATED target is **legacy/CAD monochrome** schematics, where color-aware is inert (geometric fallback) and the detector was trained on KiCad renders (domain shift untested). **State explicitly in the README:** headline F1 (~0.71 in-scope, color/detector gains) reflects the KiCad-render test regime; performance on true legacy/CAD scans (Bryston-like, monochrome, different symbol styles) is unverified and expected lower. Don't let a reader infer 0.71 generalizes to the stated target domain.
+
+## 31. Qualitative error analysis (2026-06-21) — confirms plateau + explains color/detector
+`diagnosi_d3/error_analysis.py` (read-only) breaks net-F1 false-negatives down by power/signal, GT-net degree, and component class. 4 representative boards:
+
+| board | F1 | overlap | FN power/signal | FN by degree | FN top class | FP top class |
+|---|---|---|---|---|---|---|
+| sallen_key | 0.615 | 6/8 | 0/6 | deg3-4 | ic (3) | resistor/unknown |
+| ecc83-pp | 0.611 | 11/15 | 0/16 | deg1-2 (12) | unknown (10) | connector (6) |
+| ampli_ht | 0.596 | 12/29 | 0/8 | deg1-2 (5) | resistor (8) | resistor (12) |
+| arduino_micro | 0.449 | 14/48 | 1/48 | deg1-2 (45) | connector (37) | resistor (4) |
+
+**Consistent findings:**
+1. **FN are ~99% SIGNAL nets, almost never power** (0 on 3 boards, 1/49 on micro). The label/rail merge (GND/VCC, `label_tol_factor`) WORKS — do NOT spend effort there. Kills the "GND fragmented" hypothesis.
+2. **FN dominated by LOW-degree nets (deg1-2 = 2-pin connections)**, worst on micro (45/49). The dominant quantitative loss is **short signal connections not forming** (pin doesn't reach the net / short wire dropped) — the same wire-fidelity gap the oracle (§30) flagged, now confirmed from a second angle.
+3. **Board-specific secondaries:** arduino_micro FN are mostly **connector/header** class (37) + recall 14/48 → symbol-less headers (detector's job); ecc83 FN top class **"unknown"** (10) → ref→cluster-collision junk; ampli_ht **FP resistors** (12) → geometric pin over-connection.
+
+**Why this matters (it CONFIRMS the existing opt-ins target the real error mode):**
+- Color-aware helped arduino_micro most (+0.105, §29) precisely because micro's loss IS short deg1-2 signal wires — color recovers them. Justifies color-ON for connector-heavy/deg1-2-dominated boards.
+- Detector lifted micro recall (14/48 → 0.69, §24/25) because micro's misses are symbol-less connectors — exactly what a detector recovers.
+- So the two opt-in levers already attack the two dominant error modes (short signal wires; connector recall). **No new blind spot / no new cheap lever revealed → confirms the plateau.**
+
+**Open metric question (not pursued):** ecc83 pure_gt=0.654 with PERFECT geometry ⇒ the greedy 1-net↔1-net metric likely caps it (false ceiling) OR GT has ambiguous nets. A Jaccard/Hungarian scoring would tell if 0.654 is real or a metric artifact (honesty, not capability). Deferred.
+
+**Net decision unchanged: CONSOLIDATE.** Error analysis (highest-ROI disambiguation) confirms there is no untried cheap accuracy lever; the dominant errors are already targeted by the opt-in color + detector. Next value = domain-shift sanity check (Bryston is the one legacy/monochrome data point we have: falls back to geometric, 13 comps/0 isolated — structurally sane; gather 2-3 more real legacy PDFs to validate the narrative) + honest README.
