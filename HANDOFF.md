@@ -357,3 +357,23 @@ Probe confirmed KiCad color-codes strokes (wires teal 0,100,100; bodies dark-red
 - `SpatialClusterer.separate_wires(use_color=…)`: when informative, reclaims SHORT same-color axis-aligned strokes the length-gate dropped (the dangling-pin cause). Additive only. `BipartiteGraphBuilder(use_color=False)` flag (default OFF).
 - **Measured (fast boards, color vs geo):** arduino_micro **0.449→0.554 (+0.105)**, ampli_ht +0.019, ecc83-pp **−0.040** (over-connection from a reclaimed colored stroke), sallen/pspice/rectifier/pal-ntsc/laser_driver flat → **mean ≈ +0.01**. **Bryston INVARIANT** (wire_color_model None → geometric fallback → 13 comps/0 isolated/maxdeg 5 unchanged) — the hard guardrail holds by construction.
 - **Verdict: real but MIXED lever** (big win on under-segmented boards like micro, minor regression on ecc83). Kept **opt-in (default OFF)**, +5 tests (238 green), color code ruff-clean (also cleaned 2 legacy ruff nits in `_text_guided_merge`). Potential synergy: enable on the geometric FALLBACK of colored dense boards (where the detector falls back) — untested. Don't enable by default until net-positive on more boards.
+
+## 30. Oracle re-probe — pin-as-class is NOT a standalone lever; decision = CONSOLIDATE (2026-06-21)
+Before spending a GPU cycle on a pin-keypoint/pin-as-class detector, re-ran `oracle_f1.py` (read-only) to separate "perfect pins, REAL wires" (oracle col) from "perfect pins+wires" (pure_gt). 6 boards, current pipeline:
+
+| board | real | oracle (perfect pins, real wires) | pure_gt (perfect pins+wires) |
+|---|---|---|---|
+| sallen_key | 0.615 | 0.839 (+0.22) | 0.941 |
+| pspice | 0.565 | 0.739 (+0.17) | 0.947 |
+| arduino_micro | 0.449 | 0.422 (−0.03) | 0.703 |
+| rectifier | 0.600 | 0.556 (−0.04) | 1.000 |
+| ampli_ht | 0.596 | 0.462 (−0.13) | 0.966 |
+| ecc83-pp | 0.611 | 0.408 (−0.20) | 0.654 |
+
+- **Perfect pins help only 2/6 boards, REGRESS 4/6.** Injecting accurate pins into REAL (fragmented) wires makes them land on the wrong wire fragment → worse. So **pin-as-class / YOLOv8-pose alone is measured NOT viable** — it pays off ONLY combined with clean wires. **Do not spend the GPU cycle on it standalone.**
+- **The consistent headroom is WIRES** (real→pure_gt is large & positive on every board: rectifier 0.60→1.0, ampli 0.60→0.97, sallen 0.62→0.94). But the cheap geometric wire levers are all measured-dead (separate_wires threshold, orphan filter) or mixed/KiCad-only (color §29). What's left for wires = raster-skeleton extraction (heavy, §agent-idea-#4) or accept.
+- **ecc83 (pure_gt 0.654) and arduino_micro (0.703) are intrinsically capped** even with perfect geometry (greedy metric / many tiny nets) — no extraction lever rescues them.
+- **DECISION: CONSOLIDATE (option b).** Every remaining capacity lever is now measured: geometric levers dead, color mixed/regime-limited, pin-as-class inconsistent, dense-board floor intrinsic (§26). The system is at its sensible plateau: detector+hybrid+scope+LLM, ~0.71 in-scope, robust, Bryston-safe.
+
+### Honesty caveat for README/portfolio (IMPORTANT)
+The color-aware gain (§29, micro +0.105) and the detector F1 are measured on **KiCad-rendered PDFs** — which is ALSO the only regime we can auto-label/eval. But the project's STATED target is **legacy/CAD monochrome** schematics, where color-aware is inert (geometric fallback) and the detector was trained on KiCad renders (domain shift untested). **State explicitly in the README:** headline F1 (~0.71 in-scope, color/detector gains) reflects the KiCad-render test regime; performance on true legacy/CAD scans (Bryston-like, monochrome, different symbol styles) is unverified and expected lower. Don't let a reader infer 0.71 generalizes to the stated target domain.
