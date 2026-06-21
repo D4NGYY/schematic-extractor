@@ -46,6 +46,13 @@ ocr = [
     # imported lazily — the core extraction pipeline stays lightweight.
     "rapidocr-onnxruntime>=1.3.0",
 ]
+detector = [
+    # YOLO component detector (the hybrid path that lifts net-F1 ~0.42 -> ~0.56).
+    # Heavy (pulls torch + ultralytics + opencv); imported lazily so the core
+    # extraction pipeline stays lightweight. When not installed the builder
+    # falls back silently to the geometric pipeline. See detector_runner.py.
+    "ultralytics>=8.1.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",

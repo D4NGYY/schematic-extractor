@@ -1,0 +1,62 @@
+# Schematic AI Reasoner — two-service local stack.
+#
+#   docker compose up        # app + ollama (GPU passthrough)
+#   then open http://localhost:8501
+#
+# The Ollama service pulls the default model on first start (a few minutes,
+# ~4.7 GB). If you don't have an NVIDIA GPU, drop the `deploy:` block from the
+# ollama service — it will run on CPU (slower but functional).
+#
+# YOLO weights are mounted as a read-only volume from ./runs. If you don't have
+# them locally, the app runs the geometric pipeline (lower accuracy, no crash).
+# To get weights: train locally (scripts/train_detector.py) or download the
+# release asset into ./runs/detect/schematic_detector-9/weights/best.pt.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: schematic-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    # GPU passthrough (NVIDIA Container Toolkit required on host).
+    # Comment out this block for CPU-only.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Pull the default model on first run.
+    # (qwen2.5:7b-instruct-q4_K_M — benchmark winner, TEST_MANUAL.md §4)
+    entrypoint: >
+      /bin/bash -c "
+      ollama serve &
+      sleep 5;
+      ollama pull qwen2.5:7b-instruct-q4_K_M;
+      wait
+      "
+    restart: unless-stopped
+
+  app:
+    build: .
+    container_name: schematic-app
+    ports:
+      - "8501:8501"
+    environment:
+      # The OpenAI-compatible client inside the app points at the ollama service.
+      - OLLAMA_BASE_URL=http://ollama:11434/v1
+    volumes:
+      # Mount YOLO weights read-only if present locally.
+      - ./runs:/app/runs:ro
+      # Persist uploaded PDFs + detector render cache across restarts.
+      - app_cache:/app/.cache
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_models:
+  app_cache:

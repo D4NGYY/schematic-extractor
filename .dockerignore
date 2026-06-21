@@ -1,0 +1,46 @@
+# Keep the build context small: heavy / regenerable / private artifacts.
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual envs
+.venv*/
+venv*/
+
+# Heavy regenerable artifacts (downloaded or trained locally, NOT in image).
+# runs/ contains YOLO weights (~100MB) — mounted as a volume, not baked in.
+runs/
+data/detector/
+data/detector250/
+.cache/
+
+# Test input / datasets (private or large — mount if needed at runtime).
+test_input/
+data/kicad/
+data/ground_truth/
+
+# Bryston schematic: license UNVERIFIED — never bundle.
+test_input/bryston_schematic.pdf
+bryston_overlay.png
+
+# IDE / OS
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docs are not needed inside the image.
+*.md
+docs/

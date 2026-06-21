@@ -23,7 +23,12 @@ def query_cmd(
     pdf: Path = typer.Option(..., "--pdf", help="Percorso al file PDF dello schema"),
     mock: bool = typer.Option(False, "--mock", help="Usa il MockClient invece di Ollama"),
     model: str = typer.Option(DEFAULT_MODEL, "--model", help="Modello Ollama da utilizzare"),
-    verbose: bool = typer.Option(False, "--verbose", help="Stampa l'output di log dettagliato")
+    use_detector: bool = typer.Option(
+        None,
+        "--detector/--no-detector",
+        help="Usa il detector YOLO ibrido (default: auto, se i pesi esistono).",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", help="Stampa l'output di log dettagliato"),
 ) -> None:
     """
     Interroga il grafo bipartito (Componenti <-> Nets) estratto da un PDF tramite un LLM.
@@ -48,14 +53,32 @@ def query_cmd(
 
     page = pages[0]
 
-    # 2. Costruzione del grafo bipartito
+    # 2. Detector path (hybrid YOLO, fallback geometrico). Auto-abilitato se i
+    # pesi esistono e l'utente non ha forzato --no-detector.
+    from src.ml.detector_runner import DetectorRunner, is_available
+
+    detector_on = use_detector if use_detector is not None else is_available()
+    detector_comps = None
+    source_label = "geometrico"
+    if detector_on:
+        runner = DetectorRunner()
+        detector_comps, source_label = runner.run_detector_or_none(str(pdf), page)
+        if detector_comps is None:
+            source_label = "geometrico (fallback)"
+
+    typer.secho(f"Path componenti: {source_label}", fg=typer.colors.YELLOW)
+
+    # 3. Costruzione del grafo bipartito
     text_associator = TextAssociator()
     builder = BipartiteGraphBuilder(text_associator=text_associator)
-    graph = builder.build_from_page(page)
+    graph = builder.build_from_page(page, detector_components=detector_comps)
 
-    typer.secho(f"Grafo costruito: {graph.number_of_nodes()} nodi, {graph.number_of_edges()} archi.", fg=typer.colors.GREEN)
+    typer.secho(
+        f"Grafo costruito: {graph.number_of_nodes()} nodi, {graph.number_of_edges()} archi.",
+        fg=typer.colors.GREEN,
+    )
 
-    # 3. Inizializzazione LLM
+    # 4. Inizializzazione LLM
     graph_context = GraphContext(graph)
     client: LLMClient
     if mock:
@@ -67,7 +90,7 @@ def query_cmd(
 
     agent = SchematicAgent(graph_context=graph_context, llm_client=client)
 
-    # 4. Esecuzione query
+    # 5. Esecuzione query
     typer.secho("\nQuery: " + question, fg=typer.colors.MAGENTA)
     typer.secho("Agente in elaborazione...\n", fg=typer.colors.CYAN)
 

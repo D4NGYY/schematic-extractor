@@ -52,11 +52,16 @@ def build_overlay(
     dpi: int = 200,
     link_dist: float | None = None,
     show_pins: bool = True,
+    detector_components: list[Any] | None = None,
 ) -> OverlayResult:
-    """Costruisce il grafo (con link_dist scelto) e disegna l'overlay diagnostico."""
+    """Costruisce il grafo (con link_dist scelto) e disegna l'overlay diagnostico.
+
+    `detector_components` (se fornito) attiva il path detector: i confini
+    componenti vengono dai box YOLO invece che dal clustering geometrico.
+    """
     page = VectorExtractor().extract(pdf_path)[page_num]
     builder = BipartiteGraphBuilder(cluster_eps=link_dist)
-    graph = builder.build_from_page(page)
+    graph = builder.build_from_page(page, detector_components=detector_components)
 
     img, zoom = render_page_png(pdf_path, page_num, dpi)
     draw = ImageDraw.Draw(img, "RGBA")
