@@ -30,20 +30,58 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import fitz
+from PIL import Image
+from ultralytics import YOLO
+
 from src.core.graph_builder import BipartiteGraphBuilder
 from src.core.kicad_gt_reader import build_gt_graph, parse_kicad_sch
 from src.core.pdf_parser import VectorExtractor
+from src.ml.detector_source import Detection, DetectorComponentSource
 
 BASE = Path("test_input/multi_schematic")
 
+MODEL = None
+
+def get_model():
+    global MODEL
+    if MODEL is None:
+        MODEL = YOLO("runs/detect/schematic_detector-7/weights/best.pt")
+    return MODEL
 
 def score_board(pdf: Path, sch: Path) -> dict:
     pages = VectorExtractor().extract(str(pdf))
+    doc = fitz.open(str(pdf))
     num_ext_comps = 0
     ext_cn: dict[str, set] = defaultdict(set)
+    
+    detector_src = DetectorComponentSource(dpi=150.0)
+    model = get_model()
+    
     for pi, page in enumerate(pages):
+        fitz_page = doc[pi]
+        s = 150.0 / 72.0
+        pix = fitz_page.get_pixmap(matrix=fitz.Matrix(s, s))
+        if pix.n != 3:
+            pix = fitz.Pixmap(fitz.csRGB, pix)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        
+        results = model.predict(img, imgsz=1280, verbose=False)
+        result = results[0]
+        
+        detections = []
+        if result.boxes is not None:
+            for box in result.boxes:
+                x0, y0, x1, y1 = box.xyxy[0].tolist()
+                conf = float(box.conf[0])
+                cls_id = int(box.cls[0])
+                class_name = result.names[cls_id]
+                detections.append(Detection(class_name=class_name, bbox_px=(x0, y0, x1, y1), confidence=conf))
+                
+        comps = detector_src.components(detections, page)
+
         b = BipartiteGraphBuilder(cluster_eps=None)
-        b.build_from_page(page)
+        b.build_from_page(page, detector_components=comps)
         num_ext_comps += len(b.components)
         for net in b.nets.values():
             for ref, c in b.components.items():

@@ -1,13 +1,33 @@
-.aider*
+# Python
 __pycache__/
 *.pyc
+*.egg-info/
+.venv/
+venv/
+env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Secrets (never commit)
+.env
+.env.local
+.env.*.local
+
+# Tooling
+.aider*
+.claude/
+.cache/
+
+# Ultralytics base weights (downloaded on demand, not project artifacts)
+*.pt
+
+# Training outputs (regenerable, large)
+runs/
 data/detector*/
+
+# Diagnosis scratch files
 diagnosi_d3/_*.py
 diagnosi_d3/_*.json
 diagnosi_d3/_sweep_cache.pkl
-runs/
 diagnosi_d3/overlay_*.png
-.claude/
-.cache/
-# Ultralytics base weights (downloaded on demand, not project artifacts)
-*.pt
