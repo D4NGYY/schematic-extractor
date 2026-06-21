@@ -149,9 +149,30 @@ class DetectorComponentSource:
 
     @staticmethod
     def _pick_ref(refs, box, used_refs):  # type: ignore[no-untyped-def]
-        """Nearest unused ref whose anchor is inside the box (else None)."""
+        """Nearest unused ref designator for this detection box.
+
+        Refs in PDF schematics float just OUTSIDE the symbol body (KiCad places
+        them ~10pt above/beside the part), so a strict inside-box test misses
+        most of them and the component ends up with a synthetic 'DET<i>' name.
+        Strategy: try inside-box first (strict), then expand to a tolerance band
+        proportional to the box size — so a real ref near the box wins over the
+        synthetic fallback, without pulling in refs that belong to neighbours.
+        """
         cx = (box[0] + box[2]) / 2.0
         cy = (box[1] + box[3]) / 2.0
+        box_h = max(0.0, box[3] - box[1])
+        # Tolerance: half the box height. Tuned so a ref floating just above/
+        # below a resistor/IC body is captured, but a ref belonging to an
+        # adjacent part (>1 body away) is not.
+        tol = box_h * 0.5
+
+        def _in_band(ax: float, ay: float, tolerance: float) -> bool:
+            return (
+                box[0] - tolerance <= ax <= box[2] + tolerance
+                and box[1] - tolerance <= ay <= box[3] + tolerance
+            )
+
+        # Pass 1: strict inside-box (preserves existing behavior on tight boxes).
         best = None
         best_d = float("inf")
         for r in refs:
@@ -159,6 +180,20 @@ class DetectorComponentSource:
                 continue
             ax, ay = r.symbol_center
             if not _point_in(box, ax, ay):
+                continue
+            d = (ax - cx) ** 2 + (ay - cy) ** 2
+            if d < best_d:
+                best_d = d
+                best = r.text
+        if best is not None:
+            return best
+
+        # Pass 2: tolerance band (ref floats just outside the body).
+        for r in refs:
+            if r.text in used_refs:
+                continue
+            ax, ay = r.symbol_center
+            if not _in_band(ax, ay, tol):
                 continue
             d = (ax - cx) ** 2 + (ay - cy) ** 2
             if d < best_d:

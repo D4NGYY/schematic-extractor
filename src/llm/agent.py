@@ -10,9 +10,11 @@ from src.llm.tools import TOOLS_SCHEMA, GraphContext
 
 logger = structlog.get_logger("agent")
 
-# Default tool-calling model: winner of the 5-query Bryston benchmark
-# (qwen2.5 scored 25/25, 5/5 queries, avg 3.24s — see diagnosi_d3/benchmark_llm.py).
-DEFAULT_MODEL = "qwen2.5:7b-instruct-q4_K_M"
+# Default tool-calling model. qwen3:14b is the current default: more capable
+# than the 7B (better tool-calling, respects the user's language, deeper
+# topology reasoning) and still fits a 3070 Ti 8GB at Q4_K_M (~9GB, offloaded).
+# The 7B remains a documented fallback for lower-VRAM cards.
+DEFAULT_MODEL = "qwen3:14b-q4_K_M"
 
 # Ollama endpoint. In Docker (compose) point this at the ollama service via the
 # OLLAMA_BASE_URL env var; locally it defaults to the loopback.
