@@ -6,11 +6,10 @@ _Complete handoff to resume this project from any point. Last updated: 2026-06-2
 
 ## 0. TL;DR (resume in 30 seconds)
 
-> **CURRENT STATE (2026-06-20, latest) — WORKING HYBRID SYSTEM, SEALED.**
-> Pipeline: vector PDF → geometric extraction (+OCR fallback for text-less PDFs) → bipartite Components↔Nets graph → **YOLO component detector with geometric fallback** → SPICE/KiCad/JSON export → LLM tool-calling query layer (qwen2.5:7b).
-> **Net-connectivity F1 (same-board honest delta, 32 real boards): geometric 0.42 → hybrid detector 0.56 (+0.13).** Detector wins on ~20/32 boards (bus_pci +0.50, esvideo +0.58, sonde +0.37, xilinx +0.33); the geometric fallback guarantees no regression on the boards YOLO can't see. **228 tests green, ruff clean.** Branch `feat/wire-symbol-separation`, all committed.
-> **The "make it actually work" goal is MET.** Remaining floor (electric gt=97, graphic gt=34, muxdata, rams) is an intrinsic small-symbol/ultra-dense limit — probed: imgsz 2048 doesn't move it (§25/§26). **Only optional lever left = SAHI tiling** (documented, not a blocker). Public release (§10) remains a separate later milestone.
-> Detector: `src/ml/detector_source.py` + `build_from_page(detector_components=...)` + hybrid gate; dataset `scripts/build_detector_dataset.py` (auto-labeled from KiCad, zero manual); eval `diagnosi_d3/compare_detector.py --hybrid`. Production config = **150-dpi weights + hybrid + container exclusion** (250-dpi gave no systematic gain, §25). See §22–§26.
+> **CURRENT STATE (2026-06-21) — FINISHED SYSTEM + SEALED ACCURACY.**
+> The system now does the full loop end-to-end: **load any PDF → extract topology (detector + hybrid + scope gate) → chat with it (local Ollama qwen2.5)**. Detector wired into production (CLI `--detector` + Streamlit UI), PDF upload in the UI, Docker two-service stack (ollama + app), 3-path quickstart in README. See §32.
+> **Accuracy is at its measured plateau** (~0.71 net-F1 in-scope, 0.80–0.89 clean boards). Every capacity lever is measured-dead: geometric levers dead (§19/§21/§22), color mixed/KiCad-only (§29), pin-as-class inconsistent (§30 oracle), dense-board floor intrinsic (§26). Error analysis (§31) confirms the opt-in color+detector already target the dominant error modes. **Next real value = USE (done: finished system) or domain-shift test with real legacy PDFs.**
+> **228→238 tests green, ruff clean on touched files.** Branch `feat/wire-symbol-separation`. Detector: `src/ml/detector_runner.py` (production glue, lazy ultralytics, never crashes) + `build_from_page(detector_components=...)` + hybrid gate; weights NOT in repo (train locally or release asset). See §22–§32.
 
 ---
 
@@ -401,3 +400,30 @@ The color-aware gain (§29, micro +0.105) and the detector F1 are measured on **
 **Open metric question (not pursued):** ecc83 pure_gt=0.654 with PERFECT geometry ⇒ the greedy 1-net↔1-net metric likely caps it (false ceiling) OR GT has ambiguous nets. A Jaccard/Hungarian scoring would tell if 0.654 is real or a metric artifact (honesty, not capability). Deferred.
 
 **Net decision unchanged: CONSOLIDATE.** Error analysis (highest-ROI disambiguation) confirms there is no untried cheap accuracy lever; the dominant errors are already targeted by the opt-in color + detector. Next value = domain-shift sanity check (Bryston is the one legacy/monochrome data point we have: falls back to geometric, 13 comps/0 isolated — structurally sane; gather 2-3 more real legacy PDFs to validate the narrative) + honest README.
+
+## 32. Finished system — detector in production + UI + Docker (2026-06-21)
+User goal (GitHub D4NGYY): a **finished system** to read schematics and chat with them. The pipeline + LLM layer existed but 3 production gaps kept it from being "finished": (1) detector NOT wired into production paths (CLI/UI used `BipartiteGraphBuilder()` with no `detector_components` → ran geometric ~0.42, not hybrid ~0.56; detector only used in diagnose scripts); (2) Streamlit had NO PDF upload (read only `test_input/`); (3) no reproducible deploy. All three closed this arc.
+
+**Files (new):** `src/ml/detector_runner.py`, `Dockerfile`, `docker-compose.yml`, `.dockerignore`.
+**Files (modified):** `src/cli/query.py` (flag `--detector/--no-detector`), `src/ui/app.py` (full rewrite: upload + detector + scope gate), `src/ui/render.py` (`build_overlay(detector_components=...)`), `src/llm/agent.py` (`OLLAMA_BASE_URL` env var), `pyproject.toml` (`[detector]` extra), `README.md` (3-path quickstart + "finished system" section).
+
+**Key design:**
+- `DetectorRunner` (`src/ml/detector_runner.py`) = single production glue: lazy-loads `ultralytics` (optional `[detector]` extra, lazy import → core stays lightweight), renders page 0 at trained dpi (150), runs YOLO → `Detection` boxes → `DetectorComponentSource.components_or_fallback(min_frac=0.5)` (hybrid gate, HANDOFF §24). **NEVER crashes the pipeline** — every failure (weights missing, ultralytics absent, inference error, sparse coverage) returns `None` → caller uses geometric. Both CLI and UI go through this one module so the logic is defined once. `is_available(weights)` = cheap check (no import) for UI badges / CLI defaults.
+- **CLI:** `--detector/--no-detector` (default AUTO = ON if weights exist). Prints `Path componenti: detector / geometrico / geometrico (fallback)`. Verified: sallen_key detector → 48 nodes/13 edges, `--no-detector` → 88 nodes/41 edges (different paths, both work).
+- **Streamlit UI (full rewrite):** `st.file_uploader` (arbitrary PDF) + demo PDFs (license-clean synthetic ONLY — NO Bryston in demo, license unverified); detector toggle (auto-on); **scope gate visible** (`assess_scope` → in-scope green / out-of-scope red warning with reason); quick-query buttons **dynamic from extracted refs** (no more hardcoded R1/R5 that don't exist on real boards); session-cached build keyed on (pdf,dpi,link_dist,detector) to avoid re-extraction; chat invalidates when graph changes.
+- **`OLLAMA_BASE_URL` env var** (`src/llm/agent.py`): `OllamaClient` was hardcoded `localhost:11434` — in Docker the app container can't reach the host loopback, so it now reads `OLLAMA_BASE_URL` (default unchanged). compose sets it to `http://ollama:11434/v1`.
+- **Docker stack:** `Dockerfile` = `python:3.12-slim` + libgl1/libglib2 (pymupdf/opencv), installs `.[dev,detector]`, exposes 8501, healthcheck on `_stcore/health`. `docker-compose.yml` = 2 services: `ollama` (official image, GPU passthrough, auto-pulls `qwen2.5:7b` on first start) + `app` (Streamlit, depends_on ollama, mounts `./runs` ro for weights, `OLLAMA_BASE_URL` wired). Weights (~100MB) are NOT in the repo (gitignored `runs/`) — train locally or download as release asset; when absent the app runs geometric.
+
+**Guardrails held:**
+- 238 tests green after every change (detector wiring, UI rewrite, agent env var). The 2 async LLM tests run only when `pytest-asyncio` is installed (env-specific, not a regression).
+- All new `.py` compile + import-check OK. `app.py` import-smoke-tested headless (can't run the Streamlit server in sandbox).
+- `detector_runner` returns `None` on every failure mode → UI/CLI gracefully degrade to geometric, matching the hybrid-fallback principle (§24).
+
+**Decisions accepted (not blocking):**
+- Multi-page PDFs: detector is page-0 only (dataset HANDOFF §23 labels page 0); pages 1+ run geometric. Documented.
+- compose GPU block requires NVIDIA Container Toolkit on host; commented block for CPU-only.
+- `.pre-commit-config.yaml` still absent (declared in dev deps); `graph_builder.py` still 737 LOC (TODO P5 refactor). Both hygiene, deferred.
+- Weights distribution: for now train-locally or mount `./runs`; a GitHub release asset is the clean path before public push.
+
+**Net state:** the system is **finished** in the sense the user asked — load a schematic (any PDF), extract topology (detector + hybrid + scope), chat with it (local Ollama). 3-path quickstart (Docker / local / mock) in README. `feat/wire-symbol-separation`, index synced (§28 recipe), 238 green, ruff clean on touched files. Next real value (not this arc): domain-shift test with 2-3 real legacy PDFs, and the public repo push to D4NGYY.
+

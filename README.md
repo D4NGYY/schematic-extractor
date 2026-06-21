@@ -26,6 +26,19 @@ All F1 figures and the detector/color gains are measured on **KiCad-rendered PDF
 
 ---
 
+## The finished system
+
+A complete loop: **load a schematic → extract the topology → ask questions about it.**
+
+1. **Load** — upload any vector PDF in the Streamlit UI (or pass `--pdf` to the CLI). Demo schematics are available in-repo.
+2. **Extract** — the pipeline runs the **YOLO component detector** (hybrid, with automatic geometric fallback) → builds the bipartite Components↔Nets graph.
+3. **Scope** — a density gate (`scope.py`) tells you up front whether the board is within the supported envelope. Ultra-dense boards are flagged low-confidence instead of returning unreliable topology.
+4. **Ask** — an LLM tool-calling layer (default: local Ollama `qwen2.5:7b`, 25/25 on a scored benchmark) answers questions through 7 graph tools: isolated components, neighbors, paths, net summaries, value search, etc.
+
+The detector weights (~100 MB) are **not in the repo** — train locally (`scripts/train_detector.py`) or download the release asset. When absent the app silently falls back to the geometric pipeline (F1 ~0.42 vs ~0.56 with the detector).
+
+---
+
 ## How it works
 
 ```
@@ -53,21 +66,43 @@ ground truth: KiCad .kicad_sch -> exact mm->pt transform -> auto-labeled (no man
 
 ## Quickstart
 
+Three ways to run the finished system. Pick the one that fits.
+
+### A. Docker (recommended — no local setup)
 ```bash
-pip install -e ".[dev]"          # core; add ".[ocr]" for the RapidOCR fallback
+docker compose up                       # builds app, pulls qwen2.5, opens port 8501
+# then open http://localhost:8501
+```
+The compose stack runs two services: **ollama** (GPU passthrough, pulls the default `qwen2.5:7b` model on first start) and **app** (Streamlit). Mount your trained detector weights at `./runs` (read-only); if absent, the app silently runs the geometric pipeline. For CPU-only (no NVIDIA GPU), drop the `deploy:` block under the `ollama` service.
 
-# End-to-end demo: PDF -> graph -> scope -> topology Q&A (no Ollama needed)
-python scripts/demo_end_to_end.py --board sallen_key
+### B. Local install (full system, your GPU)
+```bash
+pip install -e ".[dev,detector,ocr]"    # core + detector + OCR fallback
 
-# With the trained detector (clean components) and natural-language Q&A (Ollama)
-python scripts/demo_end_to_end.py --weights runs/detect/<run>/weights/best.pt --dpi 150 --llm
+# Ollama must be running locally for LLM Q&A:
+ollama serve &
+ollama pull qwen2.5:7b-instruct-q4_K_M   # ~4.7 GB
 
-# Natural-language query over a schematic (Ollama, qwen2.5:7b)
-python -m src.cli.query "Which components are isolated?" --pdf path/to/schematic.pdf
-# ...or --mock to run without Ollama
-
-# Streamlit UI (overlay + chat)
+# Web UI: upload a PDF, see overlay + scope gate, chat
 streamlit run src/ui/app.py
+
+# Or CLI with the detector path (auto-on if weights exist)
+python -m src.cli.query query "Which components are isolated?" --pdf path/to/schematic.pdf
+python -m src.cli.query query "..." --pdf ... --no-detector    # force geometric
+python -m src.cli.query query "..." --pdf ... --mock           # no Ollama, plumbing only
+```
+
+### C. Mock mode (no GPU, no Ollama — plumbing/demo only)
+```bash
+pip install -e ".[dev]"
+python -m src.cli.query query "Which components are isolated?" --pdf path/to/schematic.pdf --mock
+```
+Runs the full extraction + graph pipeline with a stub LLM that exercises the tool layer. Good for verifying the install without any model download.
+
+### End-to-end demo scripts (no UI)
+```bash
+python scripts/demo_end_to_end.py --board sallen_key                 # PDF -> graph -> scope -> Q&A
+python scripts/demo_end_to_end.py --weights runs/detect/<run>/weights/best.pt --dpi 150 --llm
 ```
 
 ### Component detector (optional, auto-labeled)
@@ -91,12 +126,14 @@ See docs/DETECTOR.md.
 ## Repository layout
 ```
 src/core/    extraction, graph builder, OCR fallback, scope gate, KiCad GT reader
-src/ml/      clustering, classifier, color / detector integration
-src/llm/     GraphContext (7 tools), agent (Ollama), tool-calling loop
-src/cli/     query CLI                       src/ui/    Streamlit app
+src/ml/      clustering, classifier, color / detector integration, detector_runner (production glue)
+src/llm/     GraphContext (7 tools), agent (Ollama/Mock), tool-calling loop
+src/cli/     query CLI (with --detector/--no-detector)
+src/ui/      Streamlit app (PDF upload + overlay + scope gate + chat)
 scripts/     dataset builder, detector training, end-to-end demo
 diagnosi_d3/ evaluation harnesses (F1, oracle upper-bound, error analysis, detector compare)
 tests/       238 unit tests
+Dockerfile, docker-compose.yml   local two-service stack (ollama + app)
 docs/        DETECTOR.md ;  HANDOFF.md = full measured engineering log
 ```
 
