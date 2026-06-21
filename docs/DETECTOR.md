@@ -89,3 +89,16 @@ PYTHONHASHSEED=0 PYTHONPATH=. python diagnosi_d3/compare_detector.py \
 Real detector misses on genuine small boards (muxdata, rams) are a TRAINING-side
 recall problem: regenerate the dataset at higher dpi (`--dpi 250`) for small symbols
 and retrain with more epochs/augmentation — not a pipeline change.
+
+## End-to-end demo
+`scripts/demo_end_to_end.py` runs the whole pipeline on an in-scope board and
+answers topology questions via the GraphContext tools (deterministic, no Ollama).
+```
+python scripts/demo_end_to_end.py                                   # geometric baseline (noisier)
+python scripts/demo_end_to_end.py --weights runs/detect/<run>/weights/best.pt \
+       --images-dir data/detector/images --dpi 150                  # clean detector components
+python scripts/demo_end_to_end.py --weights <best.pt> --dpi 150 --llm   # + natural-language Q&A (Ollama)
+```
+Without `--weights` it uses the geometric path (spurious `Ux` clusters / title-block
+text as nets); `--weights` swaps in detector components for clean refs. `--llm`
+adds real natural-language answers through the SchematicAgent.
