@@ -8,6 +8,16 @@ Legacy schematics (service manuals, CAD exports) are locked as pixels or vector 
 
 ---
 
+## Demo
+
+<p align="center">
+  <img src="bryston_overlay.png" alt="Schematic extraction demo — Bryston board with detected components and reconstructed nets overlaid" width="700">
+</p>
+
+*Detected components (YOLO) and reconstructed nets (geometric BFS over T-/dot-junctions) overlaid on a Bryston amplifier schematic. Color encodes the wire/symbol separation step; bounding boxes are the detector output feeding the bipartite Components↔Nets graph.*
+
+---
+
 ## Results (honest, measured)
 
 Net-connectivity is scored with an F1 over component↔net memberships (did each component's pins land on the correct nets), against ground truth **auto-derived from KiCad** (no manual labeling).
